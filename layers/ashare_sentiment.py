@@ -70,24 +70,24 @@ def get_ashare_sentiment() -> dict:
 
 
     # ── 北向资金 ──────────────────────────────────────
-try:
-    df_north = ak.stock_hsgt_hist_em(symbol="北向资金")
-    df_north = df_north.sort_values("日期").tail(1)
-    flow = float(df_north["当日成交净买额"].iloc[-1])  # 单位：亿元
-    detail["北向资金(亿)"] = round(flow, 2)
-    detail["北向日期"]     = str(df_north["日期"].iloc[-1])
-    if flow > 50:
-        score += 0.30
-    elif flow > 10:
-        score += 0.15
-    elif flow > -10:
-        score += 0.00
-    elif flow > -50:
-        score -= 0.15
-    else:
-        score -= 0.30
-except Exception as e:
-    detail["北向资金"] = f"获取失败: {e}"
+    try:
+        df_north = ak.stock_hsgt_hist_em(symbol="北向资金")
+        df_north = df_north.sort_values("日期").tail(1)
+        flow = float(df_north["当日成交净买额"].iloc[-1])  # 单位：亿元
+        detail["北向资金(亿)"] = round(flow, 2)
+        detail["北向日期"]     = str(df_north["日期"].iloc[-1])
+        if flow > 50:
+            score += 0.30
+        elif flow > 10:
+            score += 0.15
+        elif flow > -10:
+            score += 0.00
+        elif flow > -50:
+            score -= 0.15
+        else:
+            score -= 0.30
+    except Exception as e:
+        detail["北向资金"] = f"获取失败: {e}"
 
 
     # ── 涨跌停比 ──────────────────────────────────────
