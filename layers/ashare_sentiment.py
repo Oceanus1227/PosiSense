@@ -70,7 +70,7 @@ def get_ashare_sentiment() -> dict:
 
     # ── 北向资金 ──────────────────────────────────────
     try:
-        df_north = ak.stock_hsgt_north_net_flow_in_em(symbol="沪深港通")
+        df_north = ak.stock_hsgt_north_net_flow_em(symbol="沪深港通")
         df_north = df_north.sort_values("date").tail(1)
         flow = float(df_north["value"].iloc[-1])  # 单位：亿元
         detail["北向资金(亿)"] = round(flow, 2)
@@ -93,7 +93,7 @@ def get_ashare_sentiment() -> dict:
         df_limit = ak.stock_zt_pool_em(date=last_date)
         up_count = len(df_limit)
 
-        df_dt = ak.stock_dt_pool_em(date=last_date)
+        df_dt = ak.stock_zt_pool_em(date=last_date)
         down_count = len(df_dt)
 
         detail["涨停数"] = up_count
