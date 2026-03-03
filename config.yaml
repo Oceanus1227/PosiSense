@@ -1,0 +1,34 @@
+# 仓位配置
+position:
+  max: 100
+  min: 0
+  step: 10  # 输出精度，10% 为一档
+
+# 四层权重（合计必须 = 1.0）
+weights:
+  global_sentiment: 0.30
+  global_sectors:   0.20
+  ashare_sentiment: 0.30
+  ashare_sectors:   0.20
+
+# VIX 熔断阈值
+vix:
+  safe:    20
+  caution: 25
+  danger:  30
+
+# 全球行业 ETF（Yahoo Finance ticker）
+global_sector_tickers:
+  半导体: "^SOX"
+  科技:   "XLK"
+  能源:   "XLE"
+  金融:   "XLF"
+  黄金:   "GLD"
+  原油:   "USO"
+  消费:   "XLP"
+  医疗:   "XLV"
+
+# A股行业评分阈值（涨跌幅 %）
+ashare_sector:
+  strong_threshold: 1.0   # 涨幅 > 1% 视为强势
+  weak_threshold:  -1.0   # 跌幅 < -1% 视为弱势
