@@ -1,3 +1,4 @@
+import pandas as pd
 import yfinance as yf
 import yaml
 import os
@@ -7,35 +8,33 @@ with open(_cfg_path) as f:
     cfg = yaml.safe_load(f)
 
 
+def _fetch_close(ticker: str) -> pd.Series:
+    """下载单 ticker，始终返回干净的一维 Series"""
+    df = yf.download(ticker, period="5d", interval="1d",
+                     progress=False, auto_adjust=True)
+    close = df["Close"]
+    if isinstance(close, pd.DataFrame):
+        close = close.iloc[:, 0]
+    return close.dropna()
+
+
 def get_global_sectors() -> dict:
-    """
-    全球行业 ETF 强弱评分
-    返回：
-        score  : float，范围 -1.0 ~ +1.0
-        strong : list，强势行业名称
-        weak   : list，弱势行业名称
-        detail : dict，各行业涨跌幅
-    """
     tickers = cfg["global_sector_tickers"]
+    strong_thr = cfg["global_sector"]["strong_threshold"] / 100
+    weak_thr   = cfg["global_sector"]["weak_threshold"]   / 100
     strong, weak = [], []
     detail = {}
 
     for name, ticker in tickers.items():
         try:
-            df = yf.download(ticker, period="5d", interval="1d",
-                             progress=False, auto_adjust=True)
-            # 兼容新版 yfinance 多层列
-            close = df["Close"]
-            if hasattr(close, "squeeze"):
-                close = close.squeeze()
-            close = close.dropna()
+            close = _fetch_close(ticker)
             if len(close) < 2:
                 continue
-            chg = float((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2])
+            chg = float(close.iloc[-1] - close.iloc[-2]) / float(close.iloc[-2])
             detail[name] = f"{chg * 100:.2f}%"
-            if chg > cfg["global_sector"]["strong_threshold"] / 100:
+            if chg > strong_thr:
                 strong.append(name)
-            elif chg < cfg["global_sector"]["weak_threshold"] / 100:
+            elif chg < weak_thr:
                 weak.append(name)
         except Exception as e:
             detail[name] = f"获取失败: {e}"
