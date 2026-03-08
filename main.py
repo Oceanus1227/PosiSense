@@ -9,15 +9,14 @@ from layers.ashare_sentiment import get_ashare_sentiment
 from layers.ashare_sectors   import get_ashare_sectors
 from engine.position_engine  import calc_position
 
-
 HISTORY_FILE = Path(__file__).parent / "posisense_history.jsonl"
 
 
 def _save_history(now: str, result: dict, gs: dict, gsc: dict, ash: dict, asc: dict):
     record = {
-        "datetime":     now,
-        "position":     result["position"],
-        "score":        result["composite_score"],
+        "datetime":    now,
+        "position":    result["position"],
+        "score":       result["composite_score"],
         "vix_override": result["vix_override"],
         "layer_scores": result["layer_scores"],
         "detail": {
@@ -27,6 +26,7 @@ def _save_history(now: str, result: dict, gs: dict, gsc: dict, ash: dict, asc: d
             "ashare_sentiment": ash["detail"],
             "ashare_strong":    asc["strong"],
             "ashare_weak":      asc["weak"],
+            "ashare_rank":      asc.get("rank", []),
         },
     }
     with HISTORY_FILE.open("a", encoding="utf-8") as f:
@@ -65,8 +65,37 @@ def _fetch_all() -> dict:
                 print(f"  ✅ {labels[key]} 获取完成")
             except Exception as e:
                 print(f"  ❌ {labels[key]} 获取失败: {e}")
-                results[key] = {"score": 0.0, "detail": {}, "strong": [], "weak": []}
+                results[key] = {"score": 0.0, "detail": {}, "strong": [], "weak": [], "rank": []}
     return results
+
+
+def _print_sector_rank(rank: list, top_n: int = 5):
+    """打印行业涨跌幅排行：前N、省略号、后N"""
+    total = len(rank)
+    if total == 0:
+        print("    （暂无数据）")
+        return
+
+    def _print_row(item):
+        chg     = item["chg"]
+        bar_len = int((chg + 5) / 10 * 10)
+        bar_len = max(0, min(10, bar_len))
+        bar     = "█" * bar_len + "░" * (10 - bar_len)
+        print(f"    {item['rank']:>3}. {item['name']:<10} [{bar}] {chg:+.2f}%")
+
+    top    = rank[:top_n]
+    bottom = rank[-top_n:]
+
+    for item in top:
+        _print_row(item)
+
+    if total > top_n * 2:
+        print(f"    {'···':^28}（共 {total} 个行业）")
+    elif total > top_n:
+        print(f"    {'···':^28}")
+
+    for item in bottom:
+        _print_row(item)
 
 
 def run() -> int:
@@ -74,10 +103,9 @@ def run() -> int:
     print(f"\n{'='*48}")
     print(f"  📊 PosiSense  |  {now}")
     print(f"{'='*48}")
-
     print("⚡ 并发获取四层数据中...\n")
-    data = _fetch_all()
 
+    data = _fetch_all()
     gs  = data["gs"]
     gsc = data["gsc"]
     ash = data["ash"]
@@ -107,31 +135,38 @@ def run() -> int:
     print(f"  综合得分：{score:+.3f}")
     print(f"{'─'*48}")
 
+    # ── 各层得分 ──────────────────────────────────
     print("  各层得分：")
     for layer, s in result["layer_scores"].items():
         filled = int((s + 1.0) * 5)
         bar    = "█" * filled + "░" * (10 - filled)
         print(f"    {layer:6s}  [{bar}]  {s:+.3f}")
-
     print(f"{'─'*48}")
 
+    # ── 全球情绪明细 ──────────────────────────────
     print("  全球情绪明细：")
     for k, v in gs["detail"].items():
         print(f"    {k}: {v}")
 
-    print(f"\n  全球强势行业：{gsc['strong'] or '无'}")
-    print(f"  全球弱势行业：{gsc['weak']   or '无'}")
+    print(f"\n  全球强势行业：{', '.join(gsc['strong']) if gsc['strong'] else '无'}")
+    print(f"  全球弱势行业：{', '.join(gsc['weak'])   if gsc['weak']   else '无'}")
 
+    # ── A股情绪明细 ───────────────────────────────
     print(f"\n  A股情绪明细：")
     for k, v in ash["detail"].items():
         print(f"    {k}: {v}")
 
-    print(f"\n  A股强势行业：{asc['strong'] or '无'}")
-    print(f"  A股弱势行业：{asc['weak']   or '无'}")
+    # ── A股行业涨跌幅排行 ─────────────────────────
+    print(f"\n  A股行业涨跌幅排行（前5 / 后5）：")
+    _print_sector_rank(asc.get("rank", []), top_n=5)
+
+    print(f"\n  A股强势行业：{', '.join(asc['strong']) if asc['strong'] else '无'}")
+    print(f"  A股弱势行业：{', '.join(asc['weak'])   if asc['weak']   else '无'}")
 
     print(f"{'─'*48}")
     _save_history(now, result, gs, gsc, ash, asc)
     print(f"{'='*48}\n")
+
     return pos
 
 
