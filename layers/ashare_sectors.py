@@ -42,6 +42,10 @@ def get_ashare_sectors() -> dict:
     detail = {}
     rank = []
     top_n = cfg["ashare_sector"].get("top_n", 5)
+    
+    # 从配置读取阈值
+    strong_th = cfg["ashare_sector"].get("strong_threshold", 0.5)
+    weak_th = cfg["ashare_sector"].get("weak_threshold", -0.5)
 
     try:
         df = _fetch_with_retry(retries=3, delay=3.0)
@@ -91,9 +95,11 @@ def get_ashare_sectors() -> dict:
         for i, row in df.tail(top_n).iterrows():
             weak.append(f"{row[name_col]}({row[chg_col]:+.2f}%)")
 
-        # ── 评分：强势行业占比 - 弱势行业占比 ──
-        pos_count = (df[chg_col] >  0.5).sum()
-        neg_count = (df[chg_col] < -0.5).sum()
+        # ── 评分：使用配置阈值 ──
+        strong_th = cfg["ashare_sector"].get("strong_threshold", 0.5)
+        weak_th = cfg["ashare_sector"].get("weak_threshold", -0.5)
+        pos_count = (df[chg_col] > strong_th).sum()
+        neg_count = (df[chg_col] < weak_th).sum()
         net   = (pos_count - neg_count) / total if total > 0 else 0.0
         score = max(-1.0, min(1.0, round(float(net), 3)))
 
