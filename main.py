@@ -1,3 +1,5 @@
+import os
+os.environ["POSISENSE_DEBUG"] = "true"
 """
 PosiSense 主入口
 并行采集四层数据 → 计算仓位 → 输出 → 存历史 → 飞书推送
