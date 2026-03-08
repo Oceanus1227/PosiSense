@@ -21,22 +21,27 @@ def _vix_score(vix: float) -> float:
         [1.00, 0.50, 0.00, -0.50, -0.80, -1.00, -1.00]))
 
 
-def _fetch_close(ticker: str, period: str = "15d") -> pd.Series:
+def _fetch_close(ticker: str, period: str = "15d",
+                 auto_adjust: bool = True) -> pd.Series:
     """
-    下载单 ticker，返回干净的一维 Series（按日期升序）。
-    period 默认 15d，保证节假日/长假后仍有足够交易日。
+    下载单 ticker，返回干净的一维 Close Series（按日期升序）。
+    VIX 等指数必须传 auto_adjust=False，否则复权因子会导致数值异常。
     """
     df = yf.download(ticker, period=period, interval="1d",
-                     progress=False, auto_adjust=True)
+                     progress=False, auto_adjust=auto_adjust)
     if df.empty:
         raise ValueError(f"{ticker} 返回空数据")
 
-    close = df["Close"]
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
+    # 兼容新版 yfinance MultiIndex 列结构
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.droplevel(1)
 
+    if "Close" not in df.columns:
+        raise ValueError(f"{ticker} 无 Close 列，实际列: {list(df.columns)}")
+
+    close = df["Close"].dropna()
     close.index = pd.to_datetime(close.index)
-    close = close.dropna().sort_index()
+    close = close.sort_index()
 
     if len(close) == 0:
         raise ValueError(f"{ticker} 清洗后无有效数据")
@@ -45,42 +50,33 @@ def _fetch_close(ticker: str, period: str = "15d") -> pd.Series:
 
 
 def _safe_chg(close: pd.Series, ticker: str = "") -> float | None:
-    """
-    计算最近两个交易日涨跌幅。
-    用「交易日计数」而非「自然日间隔」判断，
-    只要 close 里有 >= 2 条记录就直接取 iloc[-1] 和 iloc[-2]，
-    不再用日期差拦截（yfinance 本身只返回交易日，不会混入非交易日）。
-    """
+    """计算最近两个交易日涨跌幅（yfinance 只返回交易日，直接取 iloc）"""
     if len(close) < 2:
         print(f"  [WARN] {ticker} 数据不足 2 条，跳过")
         return None
-    prev  = float(close.iloc[-2])
-    last  = float(close.iloc[-1])
+    prev = float(close.iloc[-2])
+    last = float(close.iloc[-1])
     if prev == 0:
         return None
     return (last - prev) / prev
 
 
 def get_global_sentiment() -> dict:
-    """
-    全球宏观情绪评分
-    数据来源：VIX（40%）+ 标普500（40%）+ 纳斯达克（20%）
-    """
     score  = 0.0
     detail = {}
 
-    # ── VIX 恐慌指数（权重 40%）─────────────────────
+    # ── VIX（权重 40%）—— 必须 auto_adjust=False ──
     try:
-        close   = _fetch_close("^VIX")
-        vix_val = float(close.iloc[-1])   # 只需最新值，不算涨跌幅
-        detail["VIX"] = vix_val
+        close   = _fetch_close("^VIX", auto_adjust=False)
+        vix_val = float(close.iloc[-1])
+        detail["VIX"] = round(vix_val, 2)
         vs = _vix_score(vix_val)
         score += vs * 0.4
         detail["VIX得分"] = round(vs, 3)
     except Exception as e:
         detail["VIX"] = f"获取失败: {e}"
 
-    # ── 标普500（权重 40%）──────────────────────────
+    # ── 标普500（权重 40%）──
     try:
         close = _fetch_close("^GSPC")
         chg   = _safe_chg(close, "^GSPC")
@@ -94,7 +90,7 @@ def get_global_sentiment() -> dict:
     except Exception as e:
         detail["标普500"] = f"获取失败: {e}"
 
-    # ── 纳斯达克（权重 20%）─────────────────────────
+    # ── 纳斯达克（权重 20%）──
     try:
         close = _fetch_close("^IXIC")
         chg   = _safe_chg(close, "^IXIC")
