@@ -1,8 +1,8 @@
+import numpy as np
 import yfinance as yf
 import yaml
 import os
 
-# 加载配置
 _cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 with open(_cfg_path) as f:
     cfg = yaml.safe_load(f)
@@ -22,6 +22,26 @@ def _get_1d_change(ticker: str) -> float | None:
         return None
 
 
+def _index_score(chg: float) -> float:
+    """
+    指数涨跌幅 → 得分（连续映射）
+    -2% → -0.30,  0% → 0.00,  +2% → +0.30
+    """
+    return float(np.interp(chg,
+        [-0.02, -0.010, -0.003, 0.003, 0.010, 0.02],
+        [-0.30, -0.15,   0.00,  0.00,  0.15,  0.30]))
+
+
+def _dxy_score(chg: float) -> float:
+    """
+    美元指数涨跌幅 → 得分（强美元压制新兴市场）
+    -1% → +0.20,  0% → 0.00,  +1% → -0.20
+    """
+    return float(np.interp(chg,
+        [-0.01, -0.005, -0.002, 0.002, 0.005, 0.01],
+        [ 0.20,  0.20,   0.10,  -0.10, -0.20, -0.20]))
+
+
 def get_global_sentiment() -> dict:
     """
     全球宏观情绪评分
@@ -32,25 +52,22 @@ def get_global_sentiment() -> dict:
     score = 0.0
     detail = {}
 
-    # ── VIX ──────────────────────────────────────────
+    # ── VIX（连续映射）────────────────────────────
     try:
         vix_val = yf.Ticker("^VIX").fast_info["last_price"]
         detail["VIX"] = round(float(vix_val), 2)
-        v_safe    = cfg["vix"]["safe"]
-        v_caution = cfg["vix"]["caution"]
-        v_danger  = cfg["vix"]["danger"]
-        if vix_val < v_safe:
-            score += 0.40
-        elif vix_val < v_caution:
-            score += 0.10
-        elif vix_val < v_danger:
-            score -= 0.30
-        else:
-            score -= 0.60
+
+        # VIX 15 → +0.40 | 20 → +0.10 | 25 → -0.30 | 35 → -0.60
+        vix_score = float(np.interp(vix_val,
+            [15,   20,   25,   30,   35  ],
+            [0.40, 0.10, -0.10, -0.30, -0.60]))
+        score += vix_score
+        detail["VIX得分"] = round(vix_score, 3)
+
     except Exception as e:
         detail["VIX"] = f"获取失败: {e}"
 
-    # ── 美股三大指数 ──────────────────────────────────
+    # ── 美股三大指数（连续映射）───────────────────
     indices = {"SPX": "^GSPC", "NDX": "^IXIC", "DJI": "^DJI"}
     index_changes = []
     for name, ticker in indices.items():
@@ -61,31 +78,18 @@ def get_global_sentiment() -> dict:
 
     if index_changes:
         avg = sum(index_changes) / len(index_changes)
-        if avg > 0.010:
-            score += 0.30
-        elif avg > 0.003:
-            score += 0.15
-        elif avg > -0.003:
-            score += 0.00
-        elif avg > -0.010:
-            score -= 0.15
-        else:
-            score -= 0.30
+        idx_score = _index_score(avg)
+        score += idx_score
+        detail["美股均涨跌得分"] = round(idx_score, 3)
 
-    # ── 美元指数 DXY ──────────────────────────────────
+    # ── 美元指数 DXY（连续映射）──────────────────
     dxy_chg = _get_1d_change("DX-Y.NYB")
     if dxy_chg is not None:
         detail["DXY"] = f"{dxy_chg * 100:.2f}%"
-        # 强美元压制新兴市场
-        if dxy_chg > 0.005:
-            score -= 0.20
-        elif dxy_chg > 0.002:
-            score -= 0.10
-        elif dxy_chg < -0.005:
-            score += 0.20
-        elif dxy_chg < -0.002:
-            score += 0.10
+        dxy_s = _dxy_score(dxy_chg)
+        score += dxy_s
+        detail["DXY得分"] = round(dxy_s, 3)
 
-    # ── 归一化 ────────────────────────────────────────
+    # ── 归一化 ────────────────────────────────────
     score = max(-1.0, min(1.0, round(score, 3)))
     return {"score": score, "detail": detail}
