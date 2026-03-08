@@ -1,115 +1,142 @@
-import time
-import random
-import akshare as ak
+"""
+A股市场情绪层
+数据源：akshare
+  - 上证 / 深证 / 创业板 指数涨跌幅
+  - 涨停 / 跌停家数
+  - 市场成交量变化
+"""
+
 import numpy as np
+import akshare as ak
 import pandas as pd
 import yaml
 import os
+from datetime import datetime, timedelta
 
 _cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 with open(_cfg_path) as f:
     cfg = yaml.safe_load(f)
 
 
-def _fetch_with_retry(retries: int = 5, delay: float = 5.0) -> pd.DataFrame:
-    """带重试的 akshare 请求，增加随机延迟避免反爬"""
-    last_err = None
-    for attempt in range(1, retries + 1):
-        try:
-            # 首次之外的重试，加随机延迟
-            if attempt > 1:
-                wait = delay + random.uniform(1, 3)
-                print(f"  ⏳ 等待 {wait:.1f}s 后重试...")
-                time.sleep(wait)
-            df = ak.stock_board_industry_name_em()
-            if df is not None and not df.empty:
-                return df
-            print(f"  ⚠️ A股行业第 {attempt} 次返回空数据，重试中...")
-        except Exception as e:
-            last_err = e
-            print(f"  ⚠️ A股行业第 {attempt} 次请求失败: {e}")
-    raise ConnectionError(f"重试 {retries} 次后仍失败: {last_err}")
+# ── 工具函数 ─────────────────────────────────────────
+
+def _latest_trading_date() -> str:
+    """返回最近一个交易日（排除周末），格式 YYYYMMDD"""
+    today = datetime.now()
+    offset = 1
+    if today.weekday() == 0:    # 周一 → 取上周五
+        offset = 3
+    elif today.weekday() == 6:  # 周日 → 取上周五
+        offset = 2
+    return (today - timedelta(days=offset)).strftime("%Y%m%d")
 
 
-def get_ashare_sectors() -> dict:
+def _index_score(chg: float) -> float:
+    """指数涨跌幅（小数）→ 得分，连续映射"""
+    return float(np.interp(
+        chg,
+        [-0.02, -0.010, -0.003, 0.003, 0.010, 0.02],
+        [-0.30, -0.15,   0.00,  0.00,  0.15,  0.30],
+    ))
+
+
+def _zt_score(zt: int, dt: int) -> float:
+    """涨停/跌停比 → 得分，连续映射"""
+    total = zt + dt + 1  # +1 防止除零
+    ratio = zt / total
+    return float(np.interp(
+        ratio,
+        [0.15, 0.30, 0.45, 0.55, 0.70, 0.85],
+        [-0.20, -0.10, 0.00, 0.00, 0.10, 0.20],
+    ))
+
+
+def _volume_score(vol_chg: float) -> float:
+    """成交量变化率（小数）→ 得分"""
+    return float(np.interp(
+        vol_chg,
+        [-0.30, -0.10, 0.0, 0.10, 0.30],
+        [-0.10, -0.05, 0.00, 0.05, 0.10],
+    ))
+
+
+def _get_index_chg(symbol: str) -> float | None:
+    """获取 A 股指数最近一日涨跌幅（小数形式）"""
+    try:
+        df = ak.stock_zh_index_daily(symbol=symbol)
+        df = df.dropna(subset=["close"])
+        if len(df) < 2:
+            return None
+        chg = (df["close"].iloc[-1] - df["close"].iloc[-2]) / df["close"].iloc[-2]
+        return float(chg)
+    except Exception:
+        return None
+
+
+# ── 主函数 ───────────────────────────────────────────
+
+def get_ashare_sentiment() -> dict:
     """
-    A股行业走势评分（东方财富行业板块，排名制）
+    A股市场情绪评分
     返回：
         score  : float，范围 -1.0 ~ +1.0
-        strong : list，涨幅前 N 行业
-        weak   : list，跌幅前 N 行业
-        detail : dict，全部行业涨跌幅
-        rank   : list，全部行业排名列表
+        detail : dict，各指标明细
     """
     score = 0.0
-    strong, weak = [], []
     detail = {}
-    rank = []
-    top_n = cfg["ashare_sector"].get("top_n", 5)
 
-    # 从配置读取阈值（百分比，用于得分计算）
-    strong_th = cfg["ashare_sector"].get("strong_threshold", 0.5)
-    weak_th = cfg["ashare_sector"].get("weak_threshold", -0.5)
+    # ── A股三大指数 ───────────────────────────────
+    indices = {
+        "上证指数": "sh000001",
+        "深证成指": "sz399001",
+        "创业板指": "sz399006",
+    }
+    index_changes = []
+    for name, symbol in indices.items():
+        chg = _get_index_chg(symbol)
+        if chg is not None:
+            detail[name] = f"{chg * 100:.2f}%"
+            index_changes.append(chg)
+        else:
+            detail[name] = "获取失败"
 
-    # ★ 修复：首次请求前先等待 3 秒，错开与 ashare_sentiment 的并发
-    time.sleep(3)
+    if index_changes:
+        avg = sum(index_changes) / len(index_changes)
+        idx_s = _index_score(avg)
+        score += idx_s
+        detail["A股均涨跌得分"] = round(idx_s, 3)
 
+    # ── 涨停 / 跌停家数 ──────────────────────────
     try:
-        df = _fetch_with_retry(retries=5, delay=5.0)
-
-        # ── 列名容错：兼容不同版本 akshare ──
-        col_map = {}
-        for col in df.columns:
-            if "板块" in col or "行业" in col or "名称" in col:
-                col_map["name"] = col
-            if "涨跌幅" in col or "涨幅" in col:
-                col_map["chg"] = col
-
-        name_col = col_map.get("name", "板块名称")
-        chg_col  = col_map.get("chg",  "涨跌幅")
-        detail["_columns"] = list(df.columns)
-
-        if chg_col not in df.columns:
-            detail["错误"] = f"找不到涨跌幅列，实际列名: {list(df.columns)}"
-            return {"score": score, "strong": strong, "weak": weak,
-                    "detail": detail, "rank": rank}
-
-        df[chg_col] = pd.to_numeric(df[chg_col], errors="coerce")
-        df = (df.dropna(subset=[chg_col])
-                .sort_values(chg_col, ascending=False)
-                .reset_index(drop=True))
-
-        if df.empty:
-            detail["错误"] = "数据为空（可能是非交易时段）"
-            return {"score": score, "strong": strong, "weak": weak,
-                    "detail": detail, "rank": rank}
-
-        # ── 全部行业排名 ──
-        for i, row in df.iterrows():
-            name = row[name_col]
-            chg  = row[chg_col]
-            detail[name] = f"{chg:+.2f}%"
-            rank.append({
-                "rank": i + 1,
-                "name": name,
-                "chg":  round(float(chg), 2),
-            })
-
-        # ── 强势 / 弱势 Top N ──
-        for i, row in df.head(top_n).iterrows():
-            strong.append(f"{row[name_col]}({row[chg_col]:+.2f}%)")
-        for i, row in df.tail(top_n).iterrows():
-            weak.append(f"{row[name_col]}({row[chg_col]:+.2f}%)")
-
-        # ── 得分计算：基于阈值统计强弱行业占比 ──
-        total = len(df)
-        up_count   = len(df[df[chg_col] > strong_th])
-        down_count = len(df[df[chg_col] < weak_th])
-        net = (up_count - down_count) / total if total > 0 else 0.0
-        score = max(-1.0, min(1.0, round(net, 3)))
-
+        date_str = _latest_trading_date()
+        df_zt = ak.stock_zt_pool_em(date=date_str)
+        df_dt = ak.stock_zt_pool_dtgc_em(date=date_str)
+        zt_count = len(df_zt) if df_zt is not None else 0
+        dt_count = len(df_dt) if df_dt is not None else 0
+        detail["涨停家数"] = zt_count
+        detail["跌停家数"] = dt_count
+        zt_s = _zt_score(zt_count, dt_count)
+        score += zt_s
+        detail["涨跌停得分"] = round(zt_s, 3)
     except Exception as e:
-        detail["错误"] = f"获取失败: {e}"
+        detail["涨跌停"] = f"获取失败: {e}"
 
-    return {"score": score, "strong": strong, "weak": weak,
-            "detail": detail, "rank": rank}
+    # ── 市场成交量情绪（上证成交量 5 日均量比）───
+    try:
+        df_vol = ak.stock_zh_index_daily(symbol="sh000001")
+        df_vol = df_vol.dropna(subset=["volume"])
+        if len(df_vol) >= 6:
+            vol_today = float(df_vol["volume"].iloc[-1])
+            vol_ma5   = float(df_vol["volume"].iloc[-6:-1].mean())
+            vol_chg   = (vol_today - vol_ma5) / vol_ma5 if vol_ma5 > 0 else 0.0
+            detail["成交量变化"] = f"{vol_chg * 100:.1f}%"
+            vol_s = _volume_score(vol_chg)
+            score += vol_s
+            detail["成交量得分"] = round(vol_s, 3)
+    except Exception as e:
+        detail["成交量"] = f"获取失败: {e}"
+
+    # ── 归一化 ────────────────────────────────────
+    score = max(-1.0, min(1.0, round(score, 3)))
+
+    return {"score": score, "detail": detail}
