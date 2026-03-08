@@ -28,10 +28,9 @@ global_sector_tickers:
   消费:   "XLP"
   医疗:   "XLV"
 
-# A股行业评分阈值（涨跌幅 %）
+# A股行业评分（排名制）
 ashare_sector:
-  strong_threshold: 0.5   # 涨幅 > 0.5% 视为强势
-  weak_threshold:  -0.5   # 跌幅 < -0.5% 视为弱势
+  top_n: 5   # 展示涨跌幅前/后 N 个行业
 
 # 全球行业评分阈值（涨跌幅 %）
 global_sector:
