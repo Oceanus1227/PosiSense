@@ -1,5 +1,9 @@
+"""
+全球行业 ETF 强弱评分
+数据源：yfinance
+"""
+
 import yfinance as yf
-import pandas as pd
 import yaml
 import os
 
@@ -8,51 +12,46 @@ with open(_cfg_path) as f:
     cfg = yaml.safe_load(f)
 
 
-def _safe_sector_chg(ticker: str) -> float | None:
-    df = yf.download(ticker, period="15d", interval="1d", progress=False, auto_adjust=True)
-    if df.empty or len(df) < 2:
-        return None
-    # 兼容 MultiIndex
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.droplevel(1)
-    if "Close" not in df.columns:
-        return None
-    close = df["Close"].dropna()
-    close.index = pd.to_datetime(close.index)
-    close = close.sort_index()
-    if len(close) < 2:
-        return None
-    prev = float(close.iloc[-2])
-    if prev == 0:
-        return None
-    return float(close.iloc[-1] - prev) / prev
-
-
 def get_global_sectors() -> dict:
+    """
+    全球行业 ETF 强弱评分
+    返回：
+        score  : float，范围 -1.0 ~ +1.0
+        strong : list，强势行业名称
+        weak   : list，弱势行业名称
+        detail : dict，各行业涨跌幅
+    """
     tickers = cfg["global_sector_tickers"]
+    strong_thr = cfg["global_sector"]["strong_threshold"]
+    weak_thr   = cfg["global_sector"]["weak_threshold"]
+
     strong, weak = [], []
     detail = {}
-    
-    # 从配置读取阈值（修复：使用config.yaml配置，百分比转小数）
-    strong_th = cfg["global_sector"].get("strong_threshold", 0.5) / 100
-    weak_th = cfg["global_sector"].get("weak_threshold", -0.5) / 100
-    
+
     for name, ticker in tickers.items():
         try:
-            chg = _safe_sector_chg(ticker)
-            if chg is None:
-                detail[name] = "数据不足，已跳过"
+            df = yf.download(ticker, period="5d", interval="1d",
+                             progress=False, auto_adjust=True)
+            if len(df) < 2:
+                detail[name] = "数据不足"
                 continue
+            close = df["Close"].dropna()
+            chg = (float(close.iloc[-1]) - float(close.iloc[-2])) / float(close.iloc[-2])
             detail[name] = f"{chg * 100:.2f}%"
-            # 使用配置阈值判断（修复）
-            if chg > strong_th:
+            if chg > strong_thr:
                 strong.append(name)
-            elif chg < weak_th:
+            elif chg < weak_thr:
                 weak.append(name)
         except Exception as e:
             detail[name] = f"获取失败: {e}"
-    
+
     total = len(tickers)
-    net = (len(strong) - len(weak)) / total if total > 0 else 0.0
+    net   = (len(strong) - len(weak)) / total if total > 0 else 0.0
     score = max(-1.0, min(1.0, round(net, 3)))
-    return {"score": score, "strong": strong, "weak": weak, "detail": detail}
+
+    return {
+        "score":  score,
+        "strong": strong,
+        "weak":   weak,
+        "detail": detail,
+    }
