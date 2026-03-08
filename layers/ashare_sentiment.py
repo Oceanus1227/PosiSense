@@ -80,15 +80,15 @@ def get_ashare_sentiment() -> dict:
         df_zt = ak.stock_zt_pool_em(date=trade_date)
         df_dt = ak.stock_zt_pool_dtgc_em(date=trade_date)
         zt_count = len(df_zt)
-        dt_count = len(df_dt)          # ← 修复原来的 dt_coun 拼写错误
+        dt_count = len(df_dt)
         detail["涨停数"] = zt_count
         detail["跌停数"] = dt_count
         detail["涨停日期"] = trade_date
         s = _zt_score(zt_count, dt_count)
         score += s
-        detail["涨跌停得分"] = round(s, 3)
+        detail["涨停跌停得分"] = round(s, 3)
     except Exception as e:
-        detail["涨停数"] = f"获取失败: {e}"
+        detail["涨停跌停"] = f"获取失败: {e}"
 
     score = max(-1.0, min(1.0, round(score, 3)))
     return {"score": score, "detail": detail}
