@@ -23,10 +23,6 @@ def _vix_score(vix: float) -> float:
 
 def _fetch_close(ticker: str, period: str = "15d",
                  auto_adjust: bool = True) -> pd.Series:
-    """
-    下载单 ticker，返回干净的一维 Close Series（按日期升序）。
-    VIX 等指数必须传 auto_adjust=False，否则复权因子会导致数值异常。
-    """
     df = yf.download(ticker, period=period, interval="1d",
                      progress=False, auto_adjust=auto_adjust)
     if df.empty:
@@ -45,12 +41,10 @@ def _fetch_close(ticker: str, period: str = "15d",
 
     if len(close) == 0:
         raise ValueError(f"{ticker} 清洗后无有效数据")
-
     return close
 
 
 def _safe_chg(close: pd.Series, ticker: str = "") -> float | None:
-    """计算最近两个交易日涨跌幅（yfinance 只返回交易日，直接取 iloc）"""
     if len(close) < 2:
         print(f"  [WARN] {ticker} 数据不足 2 条，跳过")
         return None
@@ -62,6 +56,10 @@ def _safe_chg(close: pd.Series, ticker: str = "") -> float | None:
 
 
 def get_global_sentiment() -> dict:
+    """
+    全球宏观情绪评分
+    数据来源：VIX（40%）+ 标普500（40%）+ 纳斯达克（20%）
+    """
     score  = 0.0
     detail = {}
 
