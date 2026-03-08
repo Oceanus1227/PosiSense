@@ -43,7 +43,7 @@ def get_ashare_sectors() -> dict:
     rank = []
     top_n = cfg["ashare_sector"].get("top_n", 5)
     
-    # 从配置读取阈值
+    # 从配置读取阈值（修复：使用config.yaml配置）
     strong_th = cfg["ashare_sector"].get("strong_threshold", 0.5)
     weak_th = cfg["ashare_sector"].get("weak_threshold", -0.5)
 
@@ -95,9 +95,7 @@ def get_ashare_sectors() -> dict:
         for i, row in df.tail(top_n).iterrows():
             weak.append(f"{row[name_col]}({row[chg_col]:+.2f}%)")
 
-        # ── 评分：使用配置阈值 ──
-        strong_th = cfg["ashare_sector"].get("strong_threshold", 0.5)
-        weak_th = cfg["ashare_sector"].get("weak_threshold", -0.5)
+        # ── 评分：使用配置阈值（修复）──
         pos_count = (df[chg_col] > strong_th).sum()
         neg_count = (df[chg_col] < weak_th).sum()
         net   = (pos_count - neg_count) / total if total > 0 else 0.0
