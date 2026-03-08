@@ -14,9 +14,9 @@ HISTORY_FILE = Path(__file__).parent / "posisense_history.jsonl"
 
 def _save_history(now: str, result: dict, gs: dict, gsc: dict, ash: dict, asc: dict):
     record = {
-        "datetime":    now,
-        "position":    result["position"],
-        "score":       result["composite_score"],
+        "datetime":     now,
+        "position":     result["position"],
+        "score":        result["composite_score"],
         "vix_override": result["vix_override"],
         "layer_scores": result["layer_scores"],
         "detail": {
@@ -157,6 +157,12 @@ def run() -> int:
         print(f"    {k}: {v}")
 
     # ── A股行业涨跌幅排行 ─────────────────────────
+    asc_detail = asc.get("detail", {})
+    if "错误" in asc_detail:
+        print(f"\n  ⚠️  A股行业数据异常: {asc_detail['错误']}")
+        if "_columns" in asc_detail:
+            print(f"  实际列名: {asc_detail['_columns']}")
+
     print(f"\n  A股行业涨跌幅排行（前5 / 后5）：")
     _print_sector_rank(asc.get("rank", []), top_n=5)
 
