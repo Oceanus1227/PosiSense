@@ -1,12 +1,10 @@
 """
 飞书 Webhook 推送模块
-支持富文本卡片消息
 """
 
 import requests
 import yaml
 import os
-import json
 from datetime import datetime
 
 _cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
@@ -15,32 +13,22 @@ with open(_cfg_path) as f:
 
 
 def _pos_label(pos: int) -> tuple[str, str]:
-    """返回 (标签文字, 卡片颜色模板)"""
-    if pos >= 80:
-        return "🟢 积极进攻", "green"
-    elif pos >= 60:
-        return "🟡 标准持仓", "yellow"
-    elif pos >= 40:
-        return "🟠 谨慎持仓", "orange"
-    elif pos >= 20:
-        return "🔴 轻仓防守", "red"
-    else:
-        return "⚫ 空仓观望", "grey"
+    if pos >= 80:   return "🟢 积极进攻", "green"
+    elif pos >= 60: return "🟡 标准持仓", "yellow"
+    elif pos >= 40: return "🟠 谨慎持仓", "orange"
+    elif pos >= 20: return "🔴 轻仓防守", "red"
+    else:           return "⚫ 空仓观望", "grey"
 
 
 def _score_bar(s: float) -> str:
-    """生成得分进度条"""
-    filled = int((s + 1.0) * 5)
-    filled = max(0, min(10, filled))
+    filled = max(0, min(10, int((s + 1.0) * 5)))
     return "█" * filled + "░" * (10 - filled)
 
 
 def _build_markdown(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict) -> str:
-    """拼装飞书卡片的 Markdown 内容"""
     pos   = result["position"]
     score = result["composite_score"]
     label, _ = _pos_label(pos)
-
     lines = []
 
     # ── 仓位建议 ──
@@ -60,10 +48,8 @@ def _build_markdown(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict) -> 
     # ── 全球市场 ──
     lines.append("---")
     lines.append("**🌐 全球市场**")
-
     vix_val = gs["detail"].get("VIX", "N/A")
     lines.append(f"VIX：`{vix_val}`")
-
     for key in ["S&P500", "NASDAQ", "道琼斯", "美元指数"]:
         val = gs["detail"].get(key, "N/A")
         lines.append(f"{key}：`{val}`")
@@ -78,14 +64,9 @@ def _build_markdown(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict) -> 
     # ── A股市场 ──
     lines.append("---")
     lines.append("**🇨🇳 A股市场**")
-
     for key in ["上证指数", "深证成指", "创业板指"]:
         val = ash["detail"].get(key, "N/A")
         lines.append(f"{key}：`{val}`")
-
-    zt = ash["detail"].get("涨停家数", "N/A")
-    dt = ash["detail"].get("跌停家数", "N/A")
-    lines.append(f"涨停/跌停：`{zt}` / `{dt}`")
 
     vol = ash["detail"].get("成交量变化", "N/A")
     lines.append(f"成交量变化：`{vol}`")
@@ -100,15 +81,11 @@ def _build_markdown(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict) -> 
 
 
 def send_feishu(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict) -> bool:
-    """
-    发送飞书卡片消息
-    返回 True 表示发送成功
-    """
+    """发送飞书卡片消息，返回 True 表示成功"""
     if not cfg["feishu"].get("enabled", False):
         print("ℹ️  飞书推送已禁用")
         return False
 
-    # 优先从环境变量读取 webhook（GitHub Secrets）
     webhook = os.environ.get("FEISHU_WEBHOOK", cfg["feishu"].get("webhook", ""))
     if not webhook:
         print("⚠️  未配置飞书 Webhook，跳过推送")
@@ -118,7 +95,6 @@ def send_feishu(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict) -> bool
     md_content   = _build_markdown(result, gs, gsc, ash, asc)
     now_str      = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    # 飞书交互式卡片
     card = {
         "msg_type": "interactive",
         "card": {
