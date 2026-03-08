@@ -8,6 +8,7 @@ from layers.global_sectors   import get_global_sectors
 from layers.ashare_sentiment import get_ashare_sentiment
 from layers.ashare_sectors   import get_ashare_sectors
 from engine.position_engine  import calc_position
+from notifier.feishu         import send_feishu
 
 HISTORY_FILE = Path(__file__).parent / "posisense_history.jsonl"
 
@@ -170,7 +171,11 @@ def run() -> int:
     print(f"  A股弱势行业：{', '.join(asc['weak'])   if asc['weak']   else '无'}")
 
     print(f"{'─'*48}")
+
+    # ── 保存历史 & 飞书推送 ───────────────────────
     _save_history(now, result, gs, gsc, ash, asc)
+    send_feishu(result, gs, gsc, ash, asc)          # ← 新增
+
     print(f"{'='*48}\n")
 
     return pos
