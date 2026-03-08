@@ -1,4 +1,5 @@
 import time
+import random
 import akshare as ak
 import numpy as np
 import pandas as pd
@@ -10,20 +11,23 @@ with open(_cfg_path) as f:
     cfg = yaml.safe_load(f)
 
 
-def _fetch_with_retry(retries: int = 3, delay: float = 3.0) -> pd.DataFrame:
-    """带重试的 akshare 请求"""
+def _fetch_with_retry(retries: int = 5, delay: float = 5.0) -> pd.DataFrame:
+    """带重试的 akshare 请求，增加随机延迟避免反爬"""
     last_err = None
     for attempt in range(1, retries + 1):
         try:
+            # 首次之外的重试，加随机延迟
+            if attempt > 1:
+                wait = delay + random.uniform(1, 3)
+                print(f"  ⏳ 等待 {wait:.1f}s 后重试...")
+                time.sleep(wait)
             df = ak.stock_board_industry_name_em()
             if df is not None and not df.empty:
                 return df
-            print(f"  ⚠️ A股行业第 {attempt} 次返回空数据，{delay}s 后重试...")
+            print(f"  ⚠️ A股行业第 {attempt} 次返回空数据，重试中...")
         except Exception as e:
             last_err = e
             print(f"  ⚠️ A股行业第 {attempt} 次请求失败: {e}")
-        if attempt < retries:
-            time.sleep(delay)
     raise ConnectionError(f"重试 {retries} 次后仍失败: {last_err}")
 
 
@@ -47,8 +51,11 @@ def get_ashare_sectors() -> dict:
     strong_th = cfg["ashare_sector"].get("strong_threshold", 0.5)
     weak_th = cfg["ashare_sector"].get("weak_threshold", -0.5)
 
+    # ★ 修复：首次请求前先等待 3 秒，错开与 ashare_sentiment 的并发
+    time.sleep(3)
+
     try:
-        df = _fetch_with_retry(retries=3, delay=3.0)
+        df = _fetch_with_retry(retries=5, delay=5.0)
 
         # ── 列名容错：兼容不同版本 akshare ──
         col_map = {}
