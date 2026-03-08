@@ -9,25 +9,19 @@ with open(_cfg_path) as f:
 
 
 def _safe_sector_chg(ticker: str) -> float | None:
-    df = yf.download(ticker, period="15d", interval="1d",
-                     progress=False, auto_adjust=True)
+    df = yf.download(ticker, period="15d", interval="1d", progress=False, auto_adjust=True)
     if df.empty or len(df) < 2:
         return None
-
     # 兼容 MultiIndex
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
-
     if "Close" not in df.columns:
         return None
-
     close = df["Close"].dropna()
     close.index = pd.to_datetime(close.index)
     close = close.sort_index()
-
     if len(close) < 2:
         return None
-
     prev = float(close.iloc[-2])
     if prev == 0:
         return None
@@ -38,7 +32,11 @@ def get_global_sectors() -> dict:
     tickers = cfg["global_sector_tickers"]
     strong, weak = [], []
     detail = {}
-
+    
+    # 从配置读取阈值（修复：使用config.yaml配置，百分比转小数）
+    strong_th = cfg["global_sector"].get("strong_threshold", 0.5) / 100
+    weak_th = cfg["global_sector"].get("weak_threshold", -0.5) / 100
+    
     for name, ticker in tickers.items():
         try:
             chg = _safe_sector_chg(ticker)
@@ -46,15 +44,15 @@ def get_global_sectors() -> dict:
                 detail[name] = "数据不足，已跳过"
                 continue
             detail[name] = f"{chg * 100:.2f}%"
+            # 使用配置阈值判断（修复）
             if chg > strong_th:
                 strong.append(name)
             elif chg < weak_th:
                 weak.append(name)
         except Exception as e:
             detail[name] = f"获取失败: {e}"
-
+    
     total = len(tickers)
-    net   = (len(strong) - len(weak)) / total if total > 0 else 0.0
+    net = (len(strong) - len(weak)) / total if total > 0 else 0.0
     score = max(-1.0, min(1.0, round(net, 3)))
-
     return {"score": score, "strong": strong, "weak": weak, "detail": detail}
