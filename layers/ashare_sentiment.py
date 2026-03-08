@@ -9,26 +9,28 @@ _cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 with open(_cfg_path) as f:
     cfg = yaml.safe_load(f)
 
-
 def _latest_trading_date() -> str:
     """
-    返回最近一个交易日（排除周六、周日），格式 YYYYMMDD。
-    周一 → 上周五（-3天）
-    周六 → 上周五（-1天）
-    周日 → 上周五（-2天）
-    其余工作日 → 昨天（-1天）
+    返回最近一个交易日，排除周末。
+    如果 akshare 返回空数据，自动往前回退最多 10 天。
     """
     today = datetime.now()
-    wd = today.weekday()   # 0=周一 … 6=周日
-    if wd == 0:
-        offset = 3   # 周一取上周五
-    elif wd == 5:
-        offset = 1   # 周六取周五
-    elif wd == 6:
-        offset = 2   # 周日取周五
-    else:
-        offset = 1   # 工作日取昨天
-    return (today - timedelta(days=offset)).strftime("%Y%m%d")
+    for offset in range(1, 11):
+        dt = today - timedelta(days=offset)
+        if dt.weekday() < 5:  # 跳过周末
+            date_str = dt.strftime("%Y%m%d")
+            try:
+                df = ak.stock_zt_pool_em(date=date_str)
+                if df is not None and not df.empty:
+                    return date_str
+            except Exception:
+                continue
+    # 兜底：返回最近的工作日（可能无数据）
+    for offset in range(1, 4):
+        dt = today - timedelta(days=offset)
+        if dt.weekday() < 5:
+            return dt.strftime("%Y%m%d")
+    return (today - timedelta(days=1)).strftime("%Y%m%d")
 
 
 def _index_score(chg: float) -> float:
