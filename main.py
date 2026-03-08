@@ -1,6 +1,11 @@
+"""
+PosiSense 主入口
+并行采集四层数据 → 计算仓位 → 输出 → 存历史 → 飞书推送
+"""
+
 import json
+import os
 from datetime import datetime
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from layers.global_sentiment import get_global_sentiment
@@ -10,114 +15,96 @@ from layers.ashare_sectors   import get_ashare_sectors
 from engine.position_engine  import calc_position
 from notifier.feishu         import send_feishu
 
-HISTORY_FILE = Path(__file__).parent / "posisense_history.jsonl"
+import yaml
+
+_cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+with open(_cfg_path) as f:
+    cfg = yaml.safe_load(f)
 
 
-def _save_history(now: str, result: dict, gs: dict, gsc: dict, ash: dict, asc: dict):
-    record = {
-        "datetime":     now,
-        "position":     result["position"],
-        "score":        result["composite_score"],
-        "vix_override": result["vix_override"],
-        "layer_scores": result["layer_scores"],
-        "detail": {
-            "global_sentiment": gs["detail"],
-            "global_strong":    gsc["strong"],
-            "global_weak":      gsc["weak"],
-            "ashare_sentiment": ash["detail"],
-            "ashare_strong":    asc["strong"],
-            "ashare_weak":      asc["weak"],
-            "ashare_rank":      asc.get("rank", []),
-        },
-    }
-    with HISTORY_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    print(f"  💾 历史记录已追加 → {HISTORY_FILE.name}（共 {_count_history()} 条）")
+# ── 历史记录 ─────────────────────────────────────────
 
-
-def _count_history() -> int:
-    if not HISTORY_FILE.exists():
-        return 0
-    with HISTORY_FILE.open(encoding="utf-8") as f:
-        return sum(1 for _ in f)
-
-
-def _fetch_all() -> dict:
-    """四层数据并发获取"""
-    tasks = {
-        "gs":  get_global_sentiment,
-        "gsc": get_global_sectors,
-        "ash": get_ashare_sentiment,
-        "asc": get_ashare_sectors,
-    }
-    labels = {
-        "gs":  "🌐 全球宏观情绪",
-        "gsc": "🏭 全球行业走势",
-        "ash": "🇨🇳 A股市场情绪",
-        "asc": "📈 A股行业走势",
-    }
-    results = {}
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        future_to_key = {executor.submit(fn): key for key, fn in tasks.items()}
-        for future in as_completed(future_to_key):
-            key = future_to_key[future]
-            try:
-                results[key] = future.result()
-                print(f"  ✅ {labels[key]} 获取完成")
-            except Exception as e:
-                print(f"  ❌ {labels[key]} 获取失败: {e}")
-                results[key] = {"score": 0.0, "detail": {}, "strong": [], "weak": [], "rank": []}
-    return results
-
-
-def _print_sector_rank(rank: list, top_n: int = 5):
-    """打印行业涨跌幅排行：前N、省略号、后N"""
-    total = len(rank)
-    if total == 0:
-        print("    （暂无数据）")
+def _save_history(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict):
+    """将本次结果追加到 JSONL 文件"""
+    hist_cfg = cfg.get("history", {})
+    if not hist_cfg.get("enabled", False):
         return
 
-    def _print_row(item):
-        chg     = item["chg"]
-        bar_len = int((chg + 5) / 10 * 10)
-        bar_len = max(0, min(10, bar_len))
-        bar     = "█" * bar_len + "░" * (10 - bar_len)
-        print(f"    {item['rank']:>3}. {item['name']:<10} [{bar}] {chg:+.2f}%")
+    path = hist_cfg.get("path", "history.jsonl")
+    record = {
+        "timestamp":       datetime.now().isoformat(),
+        "position":        result["position"],
+        "composite_score": result["composite_score"],
+        "vix_override":    result["vix_override"],
+        "layer_scores":    result["layer_scores"],
+        "global_sentiment_detail": gs["detail"],
+        "global_sectors_detail":   gsc["detail"],
+        "ashare_sentiment_detail": ash["detail"],
+        "ashare_sectors_strong":   asc["strong"],
+        "ashare_sectors_weak":     asc["weak"],
+    }
 
-    top    = rank[:top_n]
-    bottom = rank[-top_n:]
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        print(f"💾 历史记录已保存 → {path}")
+    except Exception as e:
+        print(f"⚠️  历史记录保存失败: {e}")
 
-    for item in top:
-        _print_row(item)
 
-    if total > top_n * 2:
-        print(f"    {'···':^28}（共 {total} 个行业）")
-    elif total > top_n:
-        print(f"    {'···':^28}")
-
-    for item in bottom:
-        _print_row(item)
-
+# ── 主流程 ───────────────────────────────────────────
 
 def run() -> int:
+    """
+    运行完整仓位评估流程
+    返回建议仓位（int，0–100）
+    """
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     print(f"\n{'='*48}")
     print(f"  📊 PosiSense  |  {now}")
     print(f"{'='*48}")
-    print("⚡ 并发获取四层数据中...\n")
 
-    data = _fetch_all()
-    gs  = data["gs"]
-    gsc = data["gsc"]
-    ash = data["ash"]
-    asc = data["asc"]
+    # ── 并行采集四层数据 ──────────────────────────
+    tasks = {
+        "global_sentiment": get_global_sentiment,
+        "global_sectors":   get_global_sectors,
+        "ashare_sentiment": get_ashare_sentiment,
+        "ashare_sectors":   get_ashare_sectors,
+    }
+    results = {}
+    labels = {
+        "global_sentiment": "🌐 全球宏观情绪",
+        "global_sectors":   "🏭 全球行业走势",
+        "ashare_sentiment": "🇨🇳 A股市场情绪",
+        "ashare_sectors":   "📈 A股行业走势",
+    }
 
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_map = {executor.submit(fn): key for key, fn in tasks.items()}
+        for future in as_completed(future_map):
+            key = future_map[future]
+            try:
+                results[key] = future.result()
+                s = results[key]["score"]
+                print(f"  ✅ {labels[key]}  score={s:+.3f}")
+            except Exception as e:
+                print(f"  ❌ {labels[key]}  失败: {e}")
+                results[key] = {"score": 0.0, "detail": {"错误": str(e)},
+                                "strong": [], "weak": []}
+
+    gs  = results["global_sentiment"]
+    gsc = results["global_sectors"]
+    ash = results["ashare_sentiment"]
+    asc = results["ashare_sectors"]
+
+    # ── 计算仓位 ──────────────────────────────────
     print("\n🧮 计算仓位中...\n")
     result = calc_position(gs, gsc, ash, asc)
 
     pos   = result["position"]
     score = result["composite_score"]
 
+    # 仓位等级标签
     if pos >= 80:
         label = "🟢 积极进攻"
     elif pos >= 60:
@@ -129,6 +116,7 @@ def run() -> int:
     else:
         label = "⚫ 空仓观望"
 
+    # ── 控制台输出 ────────────────────────────────
     print(f"{'─'*48}")
     print(f"  建议仓位：{pos}%   {label}")
     if result["vix_override"]:
@@ -136,51 +124,21 @@ def run() -> int:
     print(f"  综合得分：{score:+.3f}")
     print(f"{'─'*48}")
 
-    # ── 各层得分 ──────────────────────────────────
     print("  各层得分：")
     for layer, s in result["layer_scores"].items():
         filled = int((s + 1.0) * 5)
+        filled = max(0, min(10, filled))
         bar    = "█" * filled + "░" * (10 - filled)
         print(f"    {layer:6s}  [{bar}]  {s:+.3f}")
-    print(f"{'─'*48}")
-
-    # ── 全球情绪明细 ──────────────────────────────
-    print("  全球情绪明细：")
-    for k, v in gs["detail"].items():
-        print(f"    {k}: {v}")
-
-    print(f"\n  全球强势行业：{', '.join(gsc['strong']) if gsc['strong'] else '无'}")
-    print(f"  全球弱势行业：{', '.join(gsc['weak'])   if gsc['weak']   else '无'}")
-
-    # ── A股情绪明细 ───────────────────────────────
-    print(f"\n  A股情绪明细：")
-    for k, v in ash["detail"].items():
-        print(f"    {k}: {v}")
-
-    # ── A股行业涨跌幅排行 ─────────────────────────
-    asc_detail = asc.get("detail", {})
-    if "错误" in asc_detail:
-        print(f"\n  ⚠️  A股行业数据异常: {asc_detail['错误']}")
-        if "_columns" in asc_detail:
-            print(f"  实际列名: {asc_detail['_columns']}")
-
-    print(f"\n  A股行业涨跌幅排行（前5 / 后5）：")
-    _print_sector_rank(asc.get("rank", []), top_n=5)
-
-    print(f"\n  A股强势行业：{', '.join(asc['strong']) if asc['strong'] else '无'}")
-    print(f"  A股弱势行业：{', '.join(asc['weak'])   if asc['weak']   else '无'}")
 
     print(f"{'─'*48}")
 
     # ── 保存历史 & 飞书推送 ───────────────────────
-    _save_history(now, result, gs, gsc, ash, asc)
-    send_feishu(result, gs, gsc, ash, asc)          # ← 新增
-
-    print(f"{'='*48}\n")
+    _save_history(result, gs, gsc, ash, asc)
+    send_feishu(result, gs, gsc, ash, asc)
 
     return pos
 
 
 if __name__ == "__main__":
-    position = run()
-    print(f"POSITION={position}")
+    run()
