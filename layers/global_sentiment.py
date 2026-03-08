@@ -10,9 +10,17 @@ with open(_cfg_path) as f:
 
 
 def _index_score(chg: float) -> float:
+    """指数涨跌幅 → 得分，范围 -1.0 ~ +1.0"""
     return float(np.interp(chg,
-        [-0.02, -0.010, -0.003, 0.003, 0.010, 0.02],
-        [-0.30, -0.15,   0.00,  0.00,  0.15,  0.30]))
+        [-0.03, -0.015, -0.003, 0.003, 0.015, 0.03],
+        [-1.00,  -0.50,   0.00,  0.00,  0.50,  1.00]))
+
+
+def _vix_score(vix: float) -> float:
+    """VIX → 情绪得分，VIX 越高越恐慌，得分越低，范围 -1.0 ~ +1.0"""
+    return float(np.interp(vix,
+        [10,   15,   20,    25,    30,    40,    50  ],
+        [1.00, 0.50, 0.00, -0.50, -0.80, -1.00, -1.00]))
 
 
 def _fetch_close(ticker: str) -> pd.Series:
@@ -21,48 +29,53 @@ def _fetch_close(ticker: str) -> pd.Series:
                      progress=False, auto_adjust=True)
     close = df["Close"]
     if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]   # 多层列 → 取第一列
+        close = close.iloc[:, 0]
     return close.dropna()
 
 
 def get_global_sentiment() -> dict:
+    """
+    全球宏观情绪评分
+    数据来源：VIX（40%）+ 标普500（40%）+ 纳斯达克（20%）
+    返回：
+        score  : float，范围 -1.0 ~ +1.0
+        detail : dict，各指标明细（VIX 为原始数值，供熔断使用）
+    """
     score  = 0.0
     detail = {}
 
-    # ── 标普500 ──────────────────────────────────
+    # ── VIX 恐慌指数（权重 40%）─────────────────────
+    try:
+        close   = _fetch_close("^VIX")
+        vix_val = float(close.iloc[-1])
+        detail["VIX"] = vix_val                    # ← 必须是 float，熔断逻辑依赖此值
+        vs = _vix_score(vix_val)
+        score += vs * 0.4
+        detail["VIX得分"] = round(vs, 3)
+    except Exception as e:
+        detail["VIX"] = f"获取失败: {e}"
+
+    # ── 标普500（权重 40%）──────────────────────────
     try:
         close = _fetch_close("^GSPC")
-        chg = float(close.iloc[-1] - close.iloc[-2]) / float(close.iloc[-2])
+        chg   = float(close.iloc[-1] - close.iloc[-2]) / float(close.iloc[-2])
         detail["标普500涨跌"] = f"{chg * 100:.2f}%"
-        s = _index_score(chg) * 1.5
-        score += s
+        s = _index_score(chg)
+        score += s * 0.4
         detail["标普500得分"] = round(s, 3)
     except Exception as e:
         detail["标普500"] = f"获取失败: {e}"
 
-    # ── 纳斯达克 ─────────────────────────────────
+    # ── 纳斯达克（权重 20%）─────────────────────────
     try:
         close = _fetch_close("^IXIC")
-        chg = float(close.iloc[-1] - close.iloc[-2]) / float(close.iloc[-2])
+        chg   = float(close.iloc[-1] - close.iloc[-2]) / float(close.iloc[-2])
         detail["纳斯达克涨跌"] = f"{chg * 100:.2f}%"
         s = _index_score(chg)
-        score += s
+        score += s * 0.2
         detail["纳斯达克得分"] = round(s, 3)
     except Exception as e:
         detail["纳斯达克"] = f"获取失败: {e}"
-
-    # ── VIX ──────────────────────────────────────
-    try:
-        close = _fetch_close("^VIX")
-        vix_val = float(close.iloc[-1])
-        detail["VIX"] = round(vix_val, 2)
-        vix_score = float(np.interp(vix_val,
-            [12,   15,   20,    25,    30,    40  ],
-            [0.20, 0.10, 0.00, -0.10, -0.20, -0.30]))
-        score += vix_score
-        detail["VIX得分"] = round(vix_score, 3)
-    except Exception as e:
-        detail["VIX"] = f"获取失败: {e}"
 
     score = max(-1.0, min(1.0, round(score, 3)))
     return {"score": score, "detail": detail}
