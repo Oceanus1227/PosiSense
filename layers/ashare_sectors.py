@@ -42,8 +42,8 @@ def get_ashare_sectors() -> dict:
     detail = {}
     rank = []
     top_n = cfg["ashare_sector"].get("top_n", 5)
-    
-    # 从配置读取阈值（修复：使用config.yaml配置）
+
+    # 从配置读取阈值（百分比，用于得分计算）
     strong_th = cfg["ashare_sector"].get("strong_threshold", 0.5)
     weak_th = cfg["ashare_sector"].get("weak_threshold", -0.5)
 
@@ -89,20 +89,20 @@ def get_ashare_sectors() -> dict:
             })
 
         # ── 强势 / 弱势 Top N ──
-        total = len(df)
         for i, row in df.head(top_n).iterrows():
             strong.append(f"{row[name_col]}({row[chg_col]:+.2f}%)")
         for i, row in df.tail(top_n).iterrows():
             weak.append(f"{row[name_col]}({row[chg_col]:+.2f}%)")
 
-        # ── 评分：使用配置阈值（修复）──
-        pos_count = (df[chg_col] > strong_th).sum()
-        neg_count = (df[chg_col] < weak_th).sum()
-        net   = (pos_count - neg_count) / total if total > 0 else 0.0
-        score = max(-1.0, min(1.0, round(float(net), 3)))
+        # ── 得分计算：基于阈值统计强弱行业占比 ──
+        total = len(df)
+        up_count   = len(df[df[chg_col] > strong_th])
+        down_count = len(df[df[chg_col] < weak_th])
+        net = (up_count - down_count) / total if total > 0 else 0.0
+        score = max(-1.0, min(1.0, round(net, 3)))
 
     except Exception as e:
-        detail["错误"] = str(e)
+        detail["错误"] = f"获取失败: {e}"
 
     return {"score": score, "strong": strong, "weak": weak,
             "detail": detail, "rank": rank}
