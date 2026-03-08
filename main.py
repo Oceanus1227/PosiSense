@@ -8,6 +8,8 @@ import os
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import yaml
+
 from layers.global_sentiment import get_global_sentiment
 from layers.global_sectors   import get_global_sectors
 from layers.ashare_sentiment import get_ashare_sentiment
@@ -15,17 +17,13 @@ from layers.ashare_sectors   import get_ashare_sectors
 from engine.position_engine  import calc_position
 from notifier.feishu         import send_feishu
 
-import yaml
-
 _cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
 with open(_cfg_path) as f:
     cfg = yaml.safe_load(f)
 
 
-# ── 历史记录 ─────────────────────────────────────────
-
 def _save_history(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict):
-    """将本次结果追加到 JSONL 文件"""
+    """追加 JSONL 历史记录"""
     hist_cfg = cfg.get("history", {})
     if not hist_cfg.get("enabled", False):
         return
@@ -37,13 +35,12 @@ def _save_history(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict):
         "composite_score": result["composite_score"],
         "vix_override":    result["vix_override"],
         "layer_scores":    result["layer_scores"],
-        "global_sentiment_detail": gs["detail"],
-        "global_sectors_detail":   gsc["detail"],
-        "ashare_sentiment_detail": ash["detail"],
-        "ashare_sectors_strong":   asc["strong"],
-        "ashare_sectors_weak":     asc["weak"],
+        "global_sentiment": gs["detail"],
+        "global_sectors":   gsc["detail"],
+        "ashare_sentiment": ash["detail"],
+        "ashare_sectors_strong": asc["strong"],
+        "ashare_sectors_weak":   asc["weak"],
     }
-
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -52,32 +49,26 @@ def _save_history(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict):
         print(f"⚠️  历史记录保存失败: {e}")
 
 
-# ── 主流程 ───────────────────────────────────────────
-
 def run() -> int:
-    """
-    运行完整仓位评估流程
-    返回建议仓位（int，0–100）
-    """
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     print(f"\n{'='*48}")
     print(f"  📊 PosiSense  |  {now}")
     print(f"{'='*48}")
 
-    # ── 并行采集四层数据 ──────────────────────────
+    # ── 并行采集 ──────────────────────────────────
     tasks = {
         "global_sentiment": get_global_sentiment,
         "global_sectors":   get_global_sectors,
         "ashare_sentiment": get_ashare_sentiment,
         "ashare_sectors":   get_ashare_sectors,
     }
-    results = {}
     labels = {
         "global_sentiment": "🌐 全球宏观情绪",
         "global_sectors":   "🏭 全球行业走势",
         "ashare_sentiment": "🇨🇳 A股市场情绪",
         "ashare_sectors":   "📈 A股行业走势",
     }
+    results = {}
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         future_map = {executor.submit(fn): key for key, fn in tasks.items()}
@@ -89,8 +80,10 @@ def run() -> int:
                 print(f"  ✅ {labels[key]}  score={s:+.3f}")
             except Exception as e:
                 print(f"  ❌ {labels[key]}  失败: {e}")
-                results[key] = {"score": 0.0, "detail": {"错误": str(e)},
-                                "strong": [], "weak": []}
+                results[key] = {
+                    "score": 0.0, "detail": {"错误": str(e)},
+                    "strong": [], "weak": [],
+                }
 
     gs  = results["global_sentiment"]
     gsc = results["global_sectors"]
@@ -104,17 +97,11 @@ def run() -> int:
     pos   = result["position"]
     score = result["composite_score"]
 
-    # 仓位等级标签
-    if pos >= 80:
-        label = "🟢 积极进攻"
-    elif pos >= 60:
-        label = "🟡 标准持仓"
-    elif pos >= 40:
-        label = "🟠 谨慎持仓"
-    elif pos >= 20:
-        label = "🔴 轻仓防守"
-    else:
-        label = "⚫ 空仓观望"
+    if pos >= 80:   label = "🟢 积极进攻"
+    elif pos >= 60: label = "🟡 标准持仓"
+    elif pos >= 40: label = "🟠 谨慎持仓"
+    elif pos >= 20: label = "🔴 轻仓防守"
+    else:           label = "⚫ 空仓观望"
 
     # ── 控制台输出 ────────────────────────────────
     print(f"{'─'*48}")
@@ -126,14 +113,12 @@ def run() -> int:
 
     print("  各层得分：")
     for layer, s in result["layer_scores"].items():
-        filled = int((s + 1.0) * 5)
-        filled = max(0, min(10, filled))
+        filled = max(0, min(10, int((s + 1.0) * 5)))
         bar    = "█" * filled + "░" * (10 - filled)
         print(f"    {layer:6s}  [{bar}]  {s:+.3f}")
-
     print(f"{'─'*48}")
 
-    # ── 保存历史 & 飞书推送 ───────────────────────
+    # ── 保存 & 推送 ──────────────────────────────
     _save_history(result, gs, gsc, ash, asc)
     send_feishu(result, gs, gsc, ash, asc)
 
