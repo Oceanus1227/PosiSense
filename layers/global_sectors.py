@@ -30,9 +30,11 @@ def get_global_sectors() -> dict:
             chg = (close.iloc[-1] - close.iloc[-2]) / close.iloc[-2]
             chg = float(chg)
             detail[name] = f"{chg * 100:.2f}%"
-            if chg > 0.005:
+            strong_thr = cfg["global_sector"]["strong_threshold"] / 100
+            weak_thr   = cfg["global_sector"]["weak_threshold"]   / 100
+            if chg > strong_thr:
                 strong.append(name)
-            elif chg < -0.005:
+            elif chg < weak_thr:
                 weak.append(name)
         except Exception as e:
             detail[name] = f"获取失败: {e}"
