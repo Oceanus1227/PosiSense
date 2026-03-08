@@ -28,15 +28,36 @@ def get_ashare_sectors() -> dict:
 
     try:
         df = ak.stock_board_industry_name_em()
-        df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
-        df = df.dropna(subset=["涨跌幅"]).sort_values("涨跌幅", ascending=False).reset_index(drop=True)
 
-        total = len(df)
+        # ── 列名容错：兼容不同版本 akshare 的字段名 ──
+        col_map = {}
+        for col in df.columns:
+            if "板块" in col or "行业" in col or "名称" in col:
+                col_map["name"] = col
+            if "涨跌幅" in col or "涨幅" in col:
+                col_map["chg"] = col
+
+        name_col = col_map.get("name", "板块名称")
+        chg_col  = col_map.get("chg",  "涨跌幅")
+
+        # 记录实际列名，方便调试
+        detail["_columns"] = list(df.columns)
+
+        if chg_col not in df.columns:
+            detail["错误"] = f"找不到涨跌幅列，实际列名: {list(df.columns)}"
+            return {"score": score, "strong": strong, "weak": weak, "detail": detail, "rank": rank}
+
+        df[chg_col] = pd.to_numeric(df[chg_col], errors="coerce")
+        df = df.dropna(subset=[chg_col]).sort_values(chg_col, ascending=False).reset_index(drop=True)
+
+        if df.empty:
+            detail["错误"] = "数据为空（可能是非交易时段）"
+            return {"score": score, "strong": strong, "weak": weak, "detail": detail, "rank": rank}
 
         # ── 全部行业排名列表 ──────────────────────────
         for i, row in df.iterrows():
-            name = row["板块名称"]
-            chg  = row["涨跌幅"]
+            name = row[name_col]
+            chg  = row[chg_col]
             detail[name] = f"{chg:+.2f}%"
             rank.append({
                 "rank": i + 1,
@@ -51,19 +72,19 @@ def get_ashare_sectors() -> dict:
             weak.insert(0, f"{item['name']} ({item['chg']:+.2f}%)")
 
         # ── 评分：用行业涨跌幅的加权平均映射到 -1~+1 ─
-        top_mean    = df["涨跌幅"].iloc[:top_n].mean()
-        bottom_mean = df["涨跌幅"].iloc[-top_n:].mean()
-        mid_mean    = df["涨跌幅"].mean()
+        top_mean    = df[chg_col].iloc[:top_n].mean()
+        bottom_mean = df[chg_col].iloc[-top_n:].mean()
+        mid_mean    = df[chg_col].mean()
 
-        # 综合得分：整体均值为主，头尾分化为辅
-        raw = mid_mean * 0.5 + (top_mean + bottom_mean) / 2 * 0.5
-        # 映射：±3% 对应 ±1.0
-        score = float(np.interp(raw, [-3.0, -1.5, -0.3, 0.3, 1.5, 3.0],
-                                     [-1.0, -0.5,  0.0, 0.0, 0.5, 1.0]))
+        raw   = mid_mean * 0.5 + (top_mean + bottom_mean) / 2 * 0.5
+        score = float(np.interp(raw,
+            [-3.0, -1.5, -0.3, 0.3, 1.5, 3.0],
+            [-1.0, -0.5,  0.0, 0.0, 0.5, 1.0]))
         score = round(score, 3)
 
     except Exception as e:
         detail["错误"] = str(e)
+        print(f"  ⚠️  A股行业数据获取异常: {e}")
 
     return {
         "score":  score,
