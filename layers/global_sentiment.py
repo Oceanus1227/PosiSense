@@ -1,5 +1,5 @@
 import numpy as np
-import akshare as ak
+import yfinance as yf
 import yaml
 import os
 
@@ -9,78 +9,64 @@ with open(_cfg_path) as f:
 
 
 def _index_score(chg: float) -> float:
-    """
-    指数涨跌幅 → 得分（连续映射）
-    -2% → -0.30,  0% → 0.00,  +2% → +0.30
-    """
+    """指数涨跌幅（小数）→ 得分，连续映射"""
     return float(np.interp(chg,
         [-0.02, -0.010, -0.003, 0.003, 0.010, 0.02],
         [-0.30, -0.15,   0.00,  0.00,  0.15,  0.30]))
 
 
-def _get_index_chg(symbol: str) -> float | None:
-    """获取 A股指数最近一日涨跌幅（小数形式）"""
-    try:
-        df = ak.stock_zh_index_daily(symbol=symbol)
-        df = df.dropna(subset=["close"])
-        if len(df) < 2:
-            return None
-        chg = (df["close"].iloc[-1] - df["close"].iloc[-2]) / df["close"].iloc[-2]
-        return float(chg)
-    except Exception:
-        return None
-
-
-def get_ashare_sentiment() -> dict:
+def get_global_sentiment() -> dict:
     """
-    A股市场情绪评分
-    数据来源：上证、深证、创业板指数 + 市场成交量
+    全球宏观情绪评分
+    数据来源：标普500、纳斯达克、VIX
     返回：
         score  : float，范围 -1.0 ~ +1.0
         detail : dict，各指标明细
     """
-    score = 0.0
+    score  = 0.0
     detail = {}
 
-    # ── A股三大指数（连续映射）───────────────────
-    indices = {
-        "上证指数": "sh000001",
-        "深证成指": "sz399001",
-        "创业板指": "sz399006",
-    }
-    index_changes = []
-    for name, symbol in indices.items():
-        chg = _get_index_chg(symbol)
-        if chg is not None:
-            detail[name] = f"{chg * 100:.2f}%"
-            index_changes.append(chg)
-
-    if index_changes:
-        avg = sum(index_changes) / len(index_changes)
-        idx_score = _index_score(avg)
-        score += idx_score
-        detail["A股均涨跌得分"] = round(idx_score, 3)
-
-    # ── 市场成交量情绪（沪深两市合计）────────────
+    # ── 标普500 ──────────────────────────────────
     try:
-        df_vol = ak.stock_zh_index_daily(symbol="sh000001")
-        df_vol = df_vol.dropna(subset=["volume"])
-        if len(df_vol) >= 10:
-            recent_vol  = df_vol["volume"].iloc[-1]
-            avg_vol_10  = df_vol["volume"].iloc[-10:].mean()
-            vol_ratio   = recent_vol / avg_vol_10  # 1.0 = 正常量
-
-            detail["成交量比(近1/均10)"] = round(float(vol_ratio), 2)
-
-            # 量比 > 1.2 放量加分，< 0.8 缩量减分
-            vol_score = float(np.interp(vol_ratio,
-                [0.5,  0.8,  1.0,  1.2,  1.5],
-                [-0.20, -0.10, 0.00, 0.10, 0.20]))
-            score += vol_score
-            detail["成交量得分"] = round(vol_score, 3)
-
+        df = yf.download("^GSPC", period="5d", interval="1d",
+                         progress=False, auto_adjust=True)
+        close = df["Close"].dropna()
+        chg = float((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2])
+        detail["标普500涨跌"] = f"{chg * 100:.2f}%"
+        s = _index_score(chg) * 1.5   # 标普权重更高
+        score += s
+        detail["标普500得分"] = round(s, 3)
     except Exception as e:
-        detail["成交量"] = f"获取失败: {e}"
+        detail["标普500"] = f"获取失败: {e}"
+
+    # ── 纳斯达克 ─────────────────────────────────
+    try:
+        df = yf.download("^IXIC", period="5d", interval="1d",
+                         progress=False, auto_adjust=True)
+        close = df["Close"].dropna()
+        chg = float((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2])
+        detail["纳斯达克涨跌"] = f"{chg * 100:.2f}%"
+        s = _index_score(chg)
+        score += s
+        detail["纳斯达克得分"] = round(s, 3)
+    except Exception as e:
+        detail["纳斯达克"] = f"获取失败: {e}"
+
+    # ── VIX 恐慌指数 ─────────────────────────────
+    try:
+        df = yf.download("^VIX", period="5d", interval="1d",
+                         progress=False, auto_adjust=True)
+        close = df["Close"].dropna()
+        vix_val = float(close.iloc[-1])
+        detail["VIX"] = round(vix_val, 2)
+        # VIX < 15 乐观加分，> 30 恐慌减分
+        vix_score = float(np.interp(vix_val,
+            [12,   15,   20,    25,    30,    40  ],
+            [0.20, 0.10, 0.00, -0.10, -0.20, -0.30]))
+        score += vix_score
+        detail["VIX得分"] = round(vix_score, 3)
+    except Exception as e:
+        detail["VIX"] = f"获取失败: {e}"
 
     # ── 归一化 ────────────────────────────────────
     score = max(-1.0, min(1.0, round(score, 3)))
