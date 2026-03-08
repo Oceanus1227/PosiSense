@@ -2,12 +2,13 @@ name: PosiSense Daily Run
 
 on:
   schedule:
-    - cron: '0 23 * * 0-4'  # UTC 23:00 = 北京时间 07:00（周一至周五）
-  workflow_dispatch:          # 允许手动触发
+    - cron: '0 23 * * 0-4'   # UTC 23:00 = 北京时间 07:00（周一至周五）
+  workflow_dispatch:
 
 jobs:
   run-posisense:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: 📥 拉取代码
@@ -16,12 +17,22 @@ jobs:
       - name: 🐍 设置 Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
+          cache: 'pip'
 
       - name: 📦 安装依赖
         run: pip install -r requirements.txt
 
       - name: 🚀 运行 PosiSense
         env:
-          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}  # ← 新增
+          FEISHU_WEBHOOK:      ${{ secrets.FEISHU_WEBHOOK }}
+          IFIND_REFRESH_TOKEN: ${{ secrets.IFIND_REFRESH_TOKEN }}
         run: python main.py
+
+      - name: 💾 提交历史记录
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add history.jsonl || true
+          git diff --cached --quiet || git commit -m "📊 daily report $(date +%Y-%m-%d)"
+          git push || true
