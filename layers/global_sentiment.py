@@ -36,6 +36,11 @@ def _fetch_close(ticker: str, period: str = "15d",
         raise ValueError(f"{ticker} 无 Close 列，实际列: {list(df.columns)}")
 
     close = df["Close"].dropna()
+
+    # ★ 修复：如果 close 仍是 DataFrame（多列同名），squeeze 成 Series
+    if isinstance(close, pd.DataFrame):
+        close = close.squeeze(axis=1)
+
     close.index = pd.to_datetime(close.index)
     close = close.sort_index()
 
