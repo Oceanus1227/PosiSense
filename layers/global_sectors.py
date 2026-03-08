@@ -46,9 +46,9 @@ def get_global_sectors() -> dict:
                 detail[name] = "数据不足，已跳过"
                 continue
             detail[name] = f"{chg * 100:.2f}%"
-            if chg > 0.005:
+            if chg > strong_th:
                 strong.append(name)
-            elif chg < -0.005:
+            elif chg < weak_th:
                 weak.append(name)
         except Exception as e:
             detail[name] = f"获取失败: {e}"
