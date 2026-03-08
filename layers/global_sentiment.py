@@ -24,7 +24,6 @@ def _index_score(chg: float) -> float:
 
 def _vix_score(vix_val: float) -> float:
     """VIX 值 → 得分 [-0.40, +0.10]，带异常值检测"""
-    # 异常值检测：VIX正常范围 5-100
     if vix_val > 100 or vix_val < 5:
         print(f"  ⚠️  VIX异常值检测: {vix_val}，使用历史均值20")
         vix_val = 20
@@ -68,17 +67,15 @@ def get_global_sentiment() -> dict:
     score = 0.0
     detail = {}
     
-    # 记录原始值用于一致性检查
     vix_value = None
     sp500_chg = None
 
-    # ── VIX ───────────────────────────────────────
+    # VIX
     vix_val = _get_vix()
     if vix_val is not None:
         vix_value = vix_val
         detail["VIX"] = round(vix_val, 2)
         
-        # 异常值检测
         if vix_val > 100 or vix_val < 5:
             print(f"  ⚠️  VIX数据异常: {vix_val}，可能为节假日/数据源错误")
             detail["VIX"] = f"{vix_val}(异常，按20处理)"
@@ -89,7 +86,7 @@ def get_global_sentiment() -> dict:
     else:
         detail["VIX"] = "获取失败"
 
-    # ── 美股三大指数 ──────────────────────────────
+    # 美股三大指数
     us_indices = {
         "S&P500": "^GSPC",
         "NASDAQ": "^IXIC",
@@ -112,25 +109,16 @@ def get_global_sentiment() -> dict:
         score += us_s
         detail["美股均涨跌得分"] = round(us_s, 3)
 
-    # ── 数据一致性校验 ─────────────────────────────
+    # 数据一致性校验
     if vix_value and sp500_chg:
-        # VIX极高(>40)但股市上涨(>1%)，可能是数据异常
         if vix_value > 40 and sp500_chg > 1.0:
-            print(f"  ⚠️  数据不一致警告: VIX极高({vix_value})但标普500上涨({sp500_chg:.2f}%)")
-            print("       可能原因：周日/节假日数据源异常，建议交易时段重试")
-            detail["数据警告"] = "VIX与股指方向矛盾，请检查数据源"
-        # VIX极低(<15)但股市大跌(<-1%)，也可能是异常
-        elif vix_value < 15 and sp500_chg < -1.0:
-            print(f"  ⚠️  数据不一致警告: VIX极低({vix_value})但标普500下跌({sp500_chg:.2f}%)")
-            detail["数据警告"] = "VIX与股指方向矛盾，请检查数据源"
+            print(f"  ⚠️  数据不一致: VIX极高({vix_value})但标普500上涨({sp500_chg:.2f}%)")
+            detail["数据警告"] = "VIX与股指方向矛盾"
 
-    # ── 美元指数 DXY（反向指标）────────────────────
+    # 美元指数
     dxy_chg = _get_latest_chg("DX-Y.NYB")
     if dxy_chg is not None:
         detail["美元指数"] = f"{dxy_chg * 100:.2f}%"
         dxy_s = _index_score(-dxy_chg) * 0.5
         score += dxy_s
         detail["美元得分"] = round(dxy_s, 3)
-
-    score = max(-1.0, min(1.0, round(score, 3)))
-    return {"score": score, "detail": detail}
