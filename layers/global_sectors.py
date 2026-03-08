@@ -9,13 +9,9 @@ with open(_cfg_path) as f:
 
 
 def _safe_sector_chg(ticker: str) -> float | None:
-    """
-    下载行业 ETF，返回最近一个交易日涨跌幅（小数）。
-    日期间隔 > 5 天时返回 None，避免跨周计算失真。
-    """
-    df = yf.download(ticker, period="5d", interval="1d",
+    df = yf.download(ticker, period="15d", interval="1d",
                      progress=False, auto_adjust=True)
-    if len(df) < 2:
+    if df.empty or len(df) < 2:
         return None
 
     close = df["Close"]
@@ -28,17 +24,13 @@ def _safe_sector_chg(ticker: str) -> float | None:
     if len(close) < 2:
         return None
 
-    gap = (close.index[-1] - close.index[-2]).days
-    if gap > 5:
+    prev = float(close.iloc[-2])
+    if prev == 0:
         return None
-
-    return float(close.iloc[-1] - close.iloc[-2]) / float(close.iloc[-2])
+    return float(close.iloc[-1] - prev) / prev
 
 
 def get_global_sectors() -> dict:
-    """
-    全球行业 ETF 强弱评分
-    """
     tickers = cfg["global_sector_tickers"]
     strong, weak = [], []
     detail = {}
@@ -47,7 +39,7 @@ def get_global_sectors() -> dict:
         try:
             chg = _safe_sector_chg(ticker)
             if chg is None:
-                detail[name] = "数据异常，已跳过"
+                detail[name] = "数据不足，已跳过"
                 continue
             detail[name] = f"{chg * 100:.2f}%"
             if chg > 0.005:
@@ -61,9 +53,4 @@ def get_global_sectors() -> dict:
     net   = (len(strong) - len(weak)) / total if total > 0 else 0.0
     score = max(-1.0, min(1.0, round(net, 3)))
 
-    return {
-        "score":  score,
-        "strong": strong,
-        "weak":   weak,
-        "detail": detail,
-    }
+    return {"score": score, "strong": strong, "weak": weak, "detail": detail}
