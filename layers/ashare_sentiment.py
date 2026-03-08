@@ -1,3 +1,4 @@
+import numpy as np
 import akshare as ak
 import pandas as pd
 import yaml
@@ -15,9 +16,39 @@ def _latest_trading_date() -> str:
     offset = 1
     if today.weekday() == 0:   # 周一 → 取上周五
         offset = 3
-    elif today.weekday() == 6:  # 周日 → 取上周五
+    elif today.weekday() == 6: # 周日 → 取上周五
         offset = 2
     return (today - timedelta(days=offset)).strftime("%Y%m%d")
+
+
+def _index_score(chg: float) -> float:
+    """指数涨跌幅（小数）→ 得分，连续映射"""
+    return float(np.interp(chg,
+        [-0.02, -0.010, -0.003, 0.003, 0.010, 0.02],
+        [-0.30, -0.15,   0.00,  0.00,  0.15,  0.30]))
+
+
+def _north_score(flow: float) -> float:
+    """
+    北向资金净买额（亿元）→ 得分，连续映射
+    -100亿 → -0.30 | 0 → 0.00 | +100亿 → +0.30
+    """
+    return float(np.interp(flow,
+        [-100, -50,  -10,  10,   50,  100],
+        [-0.30, -0.15, 0.00, 0.00, 0.15, 0.30]))
+
+
+def _zt_score(zt: int, dt: int) -> float:
+    """
+    涨停/跌停比 → 得分，连续映射
+    ratio = zt / (zt + dt + 1)，范围 0~1，映射到 -0.20 ~ +0.20
+    """
+    total = zt + dt + 1  # +1 防止除零
+    ratio = zt / total
+    # ratio 0.2 → -0.20 | 0.5 → 0.00 | 0.8 → +0.20
+    return float(np.interp(ratio,
+        [0.15, 0.30, 0.45, 0.55, 0.70, 0.85],
+        [-0.20, -0.10, 0.00, 0.00, 0.10, 0.20]))
 
 
 def get_ashare_sentiment() -> dict:
@@ -27,107 +58,61 @@ def get_ashare_sentiment() -> dict:
         score  : float，范围 -1.0 ~ +1.0
         detail : dict，各指标明细
     """
-    score  = 0.0
+    score = 0.0
     detail = {}
-    last_date = _latest_trading_date()
 
-    # ── 上证指数涨跌 ──────────────────────────────────
+    # ── 上证指数（连续映射）───────────────────────
     try:
         df = ak.stock_zh_index_daily(symbol="sh000001")
         df = df.sort_values("date").tail(2).reset_index(drop=True)
         chg = (df["close"].iloc[-1] - df["close"].iloc[-2]) / df["close"].iloc[-2]
         detail["上证涨跌"] = f"{chg * 100:.2f}%"
         detail["上证日期"] = str(df["date"].iloc[-1])
-        if chg > 0.010:
-            score += 0.30
-        elif chg > 0.003:
-            score += 0.15
-        elif chg > -0.003:
-            score += 0.00
-        elif chg > -0.010:
-            score -= 0.15
-        else:
-            score -= 0.30
+        s = _index_score(chg) * 1.5  # 上证权重更高
+        score += s
+        detail["上证得分"] = round(s, 3)
     except Exception as e:
         detail["上证涨跌"] = f"获取失败: {e}"
 
-    # ── 深证指数涨跌 ──────────────────────────────────
+    # ── 深证指数（连续映射）───────────────────────
     try:
         df = ak.stock_zh_index_daily(symbol="sz399001")
         df = df.sort_values("date").tail(2).reset_index(drop=True)
         chg = (df["close"].iloc[-1] - df["close"].iloc[-2]) / df["close"].iloc[-2]
         detail["深证涨跌"] = f"{chg * 100:.2f}%"
-        if chg > 0.010:
-            score += 0.10
-        elif chg > 0:
-            score += 0.05
-        elif chg > -0.010:
-            score -= 0.05
-        else:
-            score -= 0.10
+        s = _index_score(chg) * 0.5  # 深证权重较低
+        score += s
+        detail["深证得分"] = round(s, 3)
     except Exception as e:
         detail["深证涨跌"] = f"获取失败: {e}"
 
-
-    # ── 北向资金 ──────────────────────────────────────
+    # ── 北向资金（连续映射）───────────────────────
     try:
         df_north = ak.stock_hsgt_hist_em(symbol="北向资金")
         df_north = df_north.sort_values("日期").tail(1)
-        flow = float(df_north["当日成交净买额"].iloc[-1])  # 单位：亿元
+        flow = float(df_north["当日成交净买额"].iloc[-1])
         detail["北向资金(亿)"] = round(flow, 2)
-        detail["北向日期"]     = str(df_north["日期"].iloc[-1])
-        if flow > 50:
-            score += 0.30
-        elif flow > 10:
-            score += 0.15
-        elif flow > -10:
-            score += 0.00
-        elif flow > -50:
-            score -= 0.15
-        else:
-            score -= 0.30
+        detail["北向日期"] = str(df_north["日期"].iloc[-1])
+        s = _north_score(flow)
+        score += s
+        detail["北向得分"] = round(s, 3)
     except Exception as e:
         detail["北向资金"] = f"获取失败: {e}"
 
-
-    # ── 涨跌停比 ──────────────────────────────────────
+    # ── 涨停/跌停比（新增）────────────────────────
     try:
-        df_limit = ak.stock_zt_pool_em(date=last_date)
-        up_count = len(df_limit)
-
-        df_dt = ak.stock_zt_pool_em(date=last_date)
-        down_count = len(df_dt)
-
-        detail["涨停数"] = up_count
-        detail["跌停数"] = down_count
-        ratio = up_count / (down_count + 1)
-        if ratio > 3.0:
-            score += 0.20
-        elif ratio > 1.5:
-            score += 0.10
-        elif ratio < 0.5:
-            score -= 0.20
-        else:
-            score -= 0.05
+        df_zt = ak.stock_zt_pool_em(date=_latest_trading_date())
+        df_dt = ak.stock_zt_pool_dtgc_em(date=_latest_trading_date())
+        zt_count = len(df_zt)
+        dt_count = len(df_dt)
+        detail["涨停数"] = zt_count
+        detail["跌停数"] = dt_count
+        s = _zt_score(zt_count, dt_count)
+        score += s
+        detail["涨跌停得分"] = round(s, 3)
     except Exception as e:
-        detail["涨跌停比"] = f"获取失败: {e}"
+        detail["涨跌停"] = f"获取失败: {e}"
 
-    # ── 成交量（与5日均量对比）────────────────────────
-    try:
-        df_vol = ak.stock_zh_index_daily(symbol="sh000001")
-        df_vol = df_vol.sort_values("date").tail(6).reset_index(drop=True)
-        avg5      = df_vol["volume"].iloc[:-1].mean()
-        today_vol = df_vol["volume"].iloc[-1]
-        vol_ratio = today_vol / avg5 if avg5 > 0 else 1.0
-        detail["量比(vs5日均)"] = round(vol_ratio, 2)
-        if vol_ratio > 1.3:
-            score += 0.20
-        elif vol_ratio > 0.8:
-            score += 0.00
-        else:
-            score -= 0.20
-    except Exception as e:
-        detail["量比"] = f"获取失败: {e}"
-
+    # ── 归一化 ────────────────────────────────────
     score = max(-1.0, min(1.0, round(score, 3)))
     return {"score": score, "detail": detail}
