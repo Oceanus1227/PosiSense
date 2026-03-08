@@ -1,3 +1,4 @@
+import time
 import akshare as ak
 import numpy as np
 import pandas as pd
@@ -7,6 +8,23 @@ import os
 _cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 with open(_cfg_path) as f:
     cfg = yaml.safe_load(f)
+
+
+def _fetch_with_retry(retries: int = 3, delay: float = 3.0) -> pd.DataFrame:
+    """带重试的 akshare 请求"""
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            df = ak.stock_board_industry_name_em()
+            if df is not None and not df.empty:
+                return df
+            print(f"  ⚠️  A股行业第 {attempt} 次返回空数据，{delay}s 后重试...")
+        except Exception as e:
+            last_err = e
+            print(f"  ⚠️  A股行业第 {attempt} 次请求失败: {e}")
+            if attempt < retries:
+                time.sleep(delay)
+    raise ConnectionError(f"重试 {retries} 次后仍失败: {last_err}")
 
 
 def get_ashare_sectors() -> dict:
@@ -27,7 +45,7 @@ def get_ashare_sectors() -> dict:
     top_n = cfg["ashare_sector"].get("top_n", 5)
 
     try:
-        df = ak.stock_board_industry_name_em()
+        df = _fetch_with_retry(retries=3, delay=3.0)
 
         # ── 列名容错：兼容不同版本 akshare 的字段名 ──
         col_map = {}
@@ -84,7 +102,7 @@ def get_ashare_sectors() -> dict:
 
     except Exception as e:
         detail["错误"] = str(e)
-        print(f"  ⚠️  A股行业数据获取异常: {e}")
+        print(f"  ❌ A股行业数据最终失败: {e}")
 
     return {
         "score":  score,
