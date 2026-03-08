@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from layers.global_sentiment import get_global_sentiment
 from layers.global_sectors   import get_global_sectors
@@ -9,12 +10,10 @@ from layers.ashare_sectors   import get_ashare_sectors
 from engine.position_engine  import calc_position
 
 
-# ── 历史记录路径 ──────────────────────────────────
 HISTORY_FILE = Path(__file__).parent / "posisense_history.jsonl"
 
 
 def _save_history(now: str, result: dict, gs: dict, gsc: dict, ash: dict, asc: dict):
-    """追加写入一条历史记录"""
     record = {
         "datetime":     now,
         "position":     result["position"],
@@ -42,23 +41,47 @@ def _count_history() -> int:
         return sum(1 for _ in f)
 
 
+def _fetch_all() -> dict:
+    """四层数据并发获取"""
+    tasks = {
+        "gs":  get_global_sentiment,
+        "gsc": get_global_sectors,
+        "ash": get_ashare_sentiment,
+        "asc": get_ashare_sectors,
+    }
+    labels = {
+        "gs":  "🌐 全球宏观情绪",
+        "gsc": "🏭 全球行业走势",
+        "ash": "🇨🇳 A股市场情绪",
+        "asc": "📈 A股行业走势",
+    }
+    results = {}
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_key = {executor.submit(fn): key for key, fn in tasks.items()}
+        for future in as_completed(future_to_key):
+            key = future_to_key[future]
+            try:
+                results[key] = future.result()
+                print(f"  ✅ {labels[key]} 获取完成")
+            except Exception as e:
+                print(f"  ❌ {labels[key]} 获取失败: {e}")
+                results[key] = {"score": 0.0, "detail": {}, "strong": [], "weak": []}
+    return results
+
+
 def run() -> int:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     print(f"\n{'='*48}")
     print(f"  📊 PosiSense  |  {now}")
     print(f"{'='*48}")
 
-    print("🌐 [1/4] 获取全球宏观情绪...")
-    gs = get_global_sentiment()
+    print("⚡ 并发获取四层数据中...\n")
+    data = _fetch_all()
 
-    print("🏭 [2/4] 获取全球行业走势...")
-    gsc = get_global_sectors()
-
-    print("🇨🇳 [3/4] 获取A股市场情绪...")
-    ash = get_ashare_sentiment()
-
-    print("📈 [4/4] 获取A股行业走势...")
-    asc = get_ashare_sectors()
+    gs  = data["gs"]
+    gsc = data["gsc"]
+    ash = data["ash"]
+    asc = data["asc"]
 
     print("\n🧮 计算仓位中...\n")
     result = calc_position(gs, gsc, ash, asc)
@@ -107,10 +130,7 @@ def run() -> int:
     print(f"  A股弱势行业：{asc['weak']   or '无'}")
 
     print(f"{'─'*48}")
-
-    # ── 保存历史记录 ──────────────────────────────
     _save_history(now, result, gs, gsc, ash, asc)
-
     print(f"{'='*48}\n")
     return pos
 
