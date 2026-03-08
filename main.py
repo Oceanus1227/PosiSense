@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from pathlib import Path
 
 from layers.global_sentiment import get_global_sentiment
 from layers.global_sectors   import get_global_sectors
@@ -8,11 +9,40 @@ from layers.ashare_sectors   import get_ashare_sectors
 from engine.position_engine  import calc_position
 
 
+# ── 历史记录路径 ──────────────────────────────────
+HISTORY_FILE = Path(__file__).parent / "posisense_history.jsonl"
+
+
+def _save_history(now: str, result: dict, gs: dict, gsc: dict, ash: dict, asc: dict):
+    """追加写入一条历史记录"""
+    record = {
+        "datetime":     now,
+        "position":     result["position"],
+        "score":        result["composite_score"],
+        "vix_override": result["vix_override"],
+        "layer_scores": result["layer_scores"],
+        "detail": {
+            "global_sentiment": gs["detail"],
+            "global_strong":    gsc["strong"],
+            "global_weak":      gsc["weak"],
+            "ashare_sentiment": ash["detail"],
+            "ashare_strong":    asc["strong"],
+            "ashare_weak":      asc["weak"],
+        },
+    }
+    with HISTORY_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    print(f"  💾 历史记录已追加 → {HISTORY_FILE.name}（共 {_count_history()} 条）")
+
+
+def _count_history() -> int:
+    if not HISTORY_FILE.exists():
+        return 0
+    with HISTORY_FILE.open(encoding="utf-8") as f:
+        return sum(1 for _ in f)
+
+
 def run() -> int:
-    """
-    运行完整仓位评估流程
-    返回建议仓位（int，0–100）
-    """
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     print(f"\n{'='*48}")
     print(f"  📊 PosiSense  |  {now}")
@@ -33,11 +63,9 @@ def run() -> int:
     print("\n🧮 计算仓位中...\n")
     result = calc_position(gs, gsc, ash, asc)
 
-    # ── 输出结果 ──────────────────────────────────────
     pos   = result["position"]
     score = result["composite_score"]
 
-    # 仓位等级标签
     if pos >= 80:
         label = "🟢 积极进攻"
     elif pos >= 60:
@@ -56,16 +84,14 @@ def run() -> int:
     print(f"  综合得分：{score:+.3f}")
     print(f"{'─'*48}")
 
-    # 各层得分可视化
     print("  各层得分：")
     for layer, s in result["layer_scores"].items():
-        filled = int((s + 1.0) * 5)        # 0–10 格
+        filled = int((s + 1.0) * 5)
         bar    = "█" * filled + "░" * (10 - filled)
         print(f"    {layer:6s}  [{bar}]  {s:+.3f}")
 
     print(f"{'─'*48}")
 
-    # 明细
     print("  全球情绪明细：")
     for k, v in gs["detail"].items():
         print(f"    {k}: {v}")
@@ -80,12 +106,15 @@ def run() -> int:
     print(f"\n  A股强势行业：{asc['strong'] or '无'}")
     print(f"  A股弱势行业：{asc['weak']   or '无'}")
 
-    print(f"{'='*48}\n")
+    print(f"{'─'*48}")
 
+    # ── 保存历史记录 ──────────────────────────────
+    _save_history(now, result, gs, gsc, ash, asc)
+
+    print(f"{'='*48}\n")
     return pos
 
 
 if __name__ == "__main__":
     position = run()
-    # 最终仓位单独打印，方便外部脚本 grep
     print(f"POSITION={position}")
