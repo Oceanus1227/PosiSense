@@ -24,17 +24,18 @@ def get_global_sectors() -> dict:
         try:
             df = yf.download(ticker, period="5d", interval="1d",
                              progress=False, auto_adjust=True)
-            if len(df) < 2:
+            # 兼容新版 yfinance 多层列
+            close = df["Close"]
+            if hasattr(close, "squeeze"):
+                close = close.squeeze()
+            close = close.dropna()
+            if len(close) < 2:
                 continue
-            close = df["Close"].dropna()
-            chg = (close.iloc[-1] - close.iloc[-2]) / close.iloc[-2]
-            chg = float(chg)
+            chg = float((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2])
             detail[name] = f"{chg * 100:.2f}%"
-            strong_thr = cfg["global_sector"]["strong_threshold"] / 100
-            weak_thr   = cfg["global_sector"]["weak_threshold"]   / 100
-            if chg > strong_thr:
+            if chg > cfg["global_sector"]["strong_threshold"] / 100:
                 strong.append(name)
-            elif chg < weak_thr:
+            elif chg < cfg["global_sector"]["weak_threshold"] / 100:
                 weak.append(name)
         except Exception as e:
             detail[name] = f"获取失败: {e}"
