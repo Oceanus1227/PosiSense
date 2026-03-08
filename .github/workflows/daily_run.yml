@@ -22,4 +22,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 🚀 运行 PosiSense
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}  # ← 新增
         run: python main.py
