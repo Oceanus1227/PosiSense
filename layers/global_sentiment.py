@@ -10,27 +10,29 @@ with open(_cfg_path) as f:
 
 
 def _index_score(chg: float) -> float:
-    """指数涨跌幅 → 得分，范围 -1.0 ~ +1.0"""
     return float(np.interp(chg,
         [-0.03, -0.015, -0.003, 0.003, 0.015, 0.03],
         [-1.00,  -0.50,   0.00,  0.00,  0.50,  1.00]))
 
 
 def _vix_score(vix: float) -> float:
-    """VIX → 情绪得分，VIX 越高越恐慌，得分越低，范围 -1.0 ~ +1.0"""
     return float(np.interp(vix,
         [10,   15,   20,    25,    30,    40,    50  ],
         [1.00, 0.50, 0.00, -0.50, -0.80, -1.00, -1.00]))
 
 
 def _fetch_close(ticker: str) -> pd.Series:
-    """下载单 ticker，始终返回干净的一维 Series"""
-    df = yf.download(ticker, period="5d", interval="1d",
+    """
+    下载单 ticker，始终返回干净的一维 Series。
+    - period="10d" 保证节假日/周末后仍有足够交易日
+    - sort_index()  保证 iloc[-1]=最新交易日，iloc[-2]=前一交易日
+    """
+    df = yf.download(ticker, period="10d", interval="1d",
                      progress=False, auto_adjust=True)
     close = df["Close"]
     if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
-    return close.dropna()
+        close = close.iloc[:, 0]          # 多层列 → 取第一列
+    return close.dropna().sort_index()    # ← 关键修复
 
 
 def get_global_sentiment() -> dict:
@@ -39,7 +41,7 @@ def get_global_sentiment() -> dict:
     数据来源：VIX（40%）+ 标普500（40%）+ 纳斯达克（20%）
     返回：
         score  : float，范围 -1.0 ~ +1.0
-        detail : dict，各指标明细（VIX 为原始数值，供熔断使用）
+        detail : dict，各指标明细（VIX 为原始 float，供熔断使用）
     """
     score  = 0.0
     detail = {}
@@ -48,7 +50,7 @@ def get_global_sentiment() -> dict:
     try:
         close   = _fetch_close("^VIX")
         vix_val = float(close.iloc[-1])
-        detail["VIX"] = vix_val                    # ← 必须是 float，熔断逻辑依赖此值
+        detail["VIX"] = vix_val                 # 必须是 float，熔断逻辑依赖此值
         vs = _vix_score(vix_val)
         score += vs * 0.4
         detail["VIX得分"] = round(vs, 3)
