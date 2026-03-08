@@ -15,13 +15,9 @@ with open(_cfg_path) as f:
 def get_global_sectors() -> dict:
     """
     全球行业 ETF 强弱评分
-    返回：
-        score  : float，范围 -1.0 ~ +1.0
-        strong : list，强势行业名称
-        weak   : list，弱势行业名称
-        detail : dict，各行业涨跌幅
+    返回：score, strong, weak, detail
     """
-    tickers = cfg["global_sector_tickers"]
+    tickers    = cfg["global_sector_tickers"]
     strong_thr = cfg["global_sector"]["strong_threshold"]
     weak_thr   = cfg["global_sector"]["weak_threshold"]
 
@@ -36,7 +32,7 @@ def get_global_sectors() -> dict:
                 detail[name] = "数据不足"
                 continue
             close = df["Close"].dropna()
-            chg = (float(close.iloc[-1]) - float(close.iloc[-2])) / float(close.iloc[-2])
+            chg = float((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2])
             detail[name] = f"{chg * 100:.2f}%"
             if chg > strong_thr:
                 strong.append(name)
@@ -49,9 +45,4 @@ def get_global_sectors() -> dict:
     net   = (len(strong) - len(weak)) / total if total > 0 else 0.0
     score = max(-1.0, min(1.0, round(net, 3)))
 
-    return {
-        "score":  score,
-        "strong": strong,
-        "weak":   weak,
-        "detail": detail,
-    }
+    return {"score": score, "strong": strong, "weak": weak, "detail": detail}
