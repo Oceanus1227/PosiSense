@@ -30,5 +30,11 @@ global_sector_tickers:
 
 # A股行业评分阈值（涨跌幅 %）
 ashare_sector:
-  strong_threshold: 1.0   # 涨幅 > 1% 视为强势
-  weak_threshold:  -1.0   # 跌幅 < -1% 视为弱势
+  strong_threshold: 0.5   # 涨幅 > 0.5% 视为强势
+  weak_threshold:  -0.5   # 跌幅 < -0.5% 视为弱势
+
+# 全球行业评分阈值（涨跌幅 %）
+global_sector:
+  strong_threshold: 0.3   # 涨幅 > 0.3% 视为强势
+  weak_threshold:  -0.3   # 跌幅 < -0.3% 视为弱势
+
