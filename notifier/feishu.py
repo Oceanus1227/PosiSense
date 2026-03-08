@@ -1,6 +1,13 @@
+"""
+飞书 Webhook 推送模块
+支持富文本卡片消息
+"""
+
 import requests
 import yaml
 import os
+import json
+from datetime import datetime
 
 _cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 with open(_cfg_path) as f:
@@ -37,9 +44,9 @@ def _build_markdown(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict) -> 
     lines = []
 
     # ── 仓位建议 ──
-    lines.append(f"## 建议仓位：{pos}%　{label}")
+    lines.append(f"## 建议仓位：{pos}%  {label}")
     if result.get("vix_override"):
-        lines.append("⚠️ VIX 熔断已触发，仓位已强制调整")
+        lines.append("⚠️ **VIX 熔断已触发，仓位已强制调整**")
     lines.append(f"综合得分：`{score:+.3f}`")
     lines.append("")
 
@@ -47,98 +54,103 @@ def _build_markdown(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict) -> 
     lines.append("**📐 各层得分**")
     for layer, s in result["layer_scores"].items():
         bar = _score_bar(s)
-        lines.append(f"{layer}　[{bar}]　{s:+.3f}")
+        lines.append(f"`{layer}` [{bar}] `{s:+.3f}`")
     lines.append("")
 
-    # ── 全球市场 & A股市场 并排展示 ──
+    # ── 全球市场 ──
     lines.append("---")
-    lines.append("")
-
-    # 全球情绪明细
-    gd = gs.get("detail", {})
-    sp_chg  = gd.get("标普500涨跌", "—")
-    nq_chg  = gd.get("纳斯达克涨跌", "—")
-    vix_val = gd.get("VIX", "—")
-
-    # A股情绪明细
-    ad = ash.get("detail", {})
-    sh_chg = ad.get("上证涨跌", "—")
-    sz_chg = ad.get("深证涨跌", "—")
-    zt     = ad.get("涨停数", "—")
-    dt     = ad.get("跌停数", "—")
-
     lines.append("**🌐 全球市场**")
-    lines.append(f"标普500：{sp_chg}")
-    lines.append(f"纳斯达克：{nq_chg}")
-    lines.append(f"VIX：{vix_val}")
+
+    vix_val = gs["detail"].get("VIX", "N/A")
+    lines.append(f"VIX：`{vix_val}`")
+
+    for key in ["S&P500", "NASDAQ", "道琼斯", "美元指数"]:
+        val = gs["detail"].get(key, "N/A")
+        lines.append(f"{key}：`{val}`")
     lines.append("")
+
+    if gsc.get("strong"):
+        lines.append(f"强势行业：{', '.join(gsc['strong'])}")
+    if gsc.get("weak"):
+        lines.append(f"弱势行业：{', '.join(gsc['weak'])}")
+    lines.append("")
+
+    # ── A股市场 ──
+    lines.append("---")
     lines.append("**🇨🇳 A股市场**")
-    lines.append(f"上证：{sh_chg}")
-    lines.append(f"深证：{sz_chg}")
-    lines.append(f"涨停/跌停：{zt} / {dt}")
+
+    for key in ["上证指数", "深证成指", "创业板指"]:
+        val = ash["detail"].get(key, "N/A")
+        lines.append(f"{key}：`{val}`")
+
+    zt = ash["detail"].get("涨停家数", "N/A")
+    dt = ash["detail"].get("跌停家数", "N/A")
+    lines.append(f"涨停/跌停：`{zt}` / `{dt}`")
+
+    vol = ash["detail"].get("成交量变化", "N/A")
+    lines.append(f"成交量变化：`{vol}`")
     lines.append("")
 
-    # ── 行业强弱 ──
-    lines.append("---")
-    lines.append("")
-
-    g_strong = "、".join(gsc.get("strong", [])) if gsc.get("strong") else "—"
-    g_weak   = "、".join(gsc.get("weak", []))   if gsc.get("weak")   else "—"
-    a_strong = "、".join(asc.get("strong", [])) if asc.get("strong") else "—"
-    a_weak   = "、".join(asc.get("weak", []))   if asc.get("weak")   else "—"
-
-    lines.append(f"**🌐 全球行业**")
-    lines.append(f"📈 强势：{g_strong}")
-    lines.append(f"📉 弱势：{g_weak}")
-    lines.append("")
-    lines.append(f"**🇨🇳 A股行业**")
-    lines.append(f"📈 强势：{a_strong}")
-    lines.append(f"📉 弱势：{a_weak}")
-    lines.append("")
-
-    # ── 免责 ──
-    lines.append("---")
-    lines.append("⚠️ 本报告仅供参考，不构成投资建议。股市有风险，投资需谨慎。")
+    if asc.get("strong"):
+        lines.append(f"强势行业：{', '.join(asc['strong'])}")
+    if asc.get("weak"):
+        lines.append(f"弱势行业：{', '.join(asc['weak'])}")
 
     return "\n".join(lines)
 
 
-def send_feishu(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict):
+def send_feishu(result: dict, gs: dict, gsc: dict, ash: dict, asc: dict) -> bool:
     """
-    飞书 Webhook 推送（卡片消息）
-    参数与 main.py 的调用保持一致：send_feishu(result, gs, gsc, ash, asc)
+    发送飞书卡片消息
+    返回 True 表示发送成功
     """
-    webhook_url = cfg.get("feishu", {}).get("webhook_url", "")
-    if not webhook_url:
-        print("  ⚠️ 未配置飞书 webhook_url，跳过推送")
-        return
+    if not cfg["feishu"].get("enabled", False):
+        print("ℹ️  飞书推送已禁用")
+        return False
 
-    from datetime import datetime
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    _, color = _pos_label(result["position"])
-    title   = f"📊 PosiSense 仓位报告 | {now}"
-    content = _build_markdown(result, gs, gsc, ash, asc)
+    # 优先从环境变量读取 webhook（GitHub Secrets）
+    webhook = os.environ.get("FEISHU_WEBHOOK", cfg["feishu"].get("webhook", ""))
+    if not webhook:
+        print("⚠️  未配置飞书 Webhook，跳过推送")
+        return False
 
-    payload = {
+    label, color = _pos_label(result["position"])
+    md_content   = _build_markdown(result, gs, gsc, ash, asc)
+    now_str      = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # 飞书交互式卡片
+    card = {
         "msg_type": "interactive",
         "card": {
             "header": {
-                "title":    {"tag": "plain_text", "content": title},
-                "template": color
+                "title": {
+                    "tag": "plain_text",
+                    "content": f"📊 PosiSense 仓位报告  |  {now_str}",
+                },
+                "template": color,
             },
             "elements": [
-                {"tag": "markdown", "content": content}
-            ]
-        }
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
+                        "content": md_content,
+                    },
+                },
+            ],
+        },
     }
 
     try:
-        resp = requests.post(webhook_url, json=payload, timeout=10)
+        resp = requests.post(webhook, json=card, timeout=10)
         resp.raise_for_status()
-        r = resp.json()
-        if r.get("code") == 0 or r.get("StatusCode") == 0:
-            print("  ✅ 飞书推送成功")
+        data = resp.json()
+        if data.get("code") == 0 or data.get("StatusCode") == 0:
+            print("✅ 飞书推送成功")
+            return True
         else:
-            print(f"  ⚠️ 飞书返回异常: {r}")
+            print(f"⚠️  飞书返回异常: {data}")
+            return False
     except Exception as e:
-        print(f"  ❌ 飞书推送失败: {e}")
+        print(f"❌ 飞书推送失败: {e}")
+        return False
