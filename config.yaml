@@ -30,9 +30,14 @@ global_sector_tickers:
 
 # A股行业评分阈值（涨跌幅 %）
 ashare_sector:
-  strong_threshold: 1.0   # 涨幅 > 1% 视为强势
-  weak_threshold:  -1.0   # 跌幅 < -1% 视为弱势
+  strong_threshold: 0.5   # 涨幅 > 0.5% 视为强势
+  weak_threshold:  -0.5   # 跌幅 < -0.5% 视为弱势
   top_n: 5
+
+# 全球行业评分阈值（涨跌幅 %）
+global_sector:
+  strong_threshold: 0.5   # 全球 ETF 涨幅 > 0.3% 视为强势
+  weak_threshold: -0.5    # 全球 ETF 跌幅 < -0.3% 视为弱势
 
 # 飞书推送配置
 # webhook 建议放 GitHub Secrets（FEISHU_WEBHOOK），不要硬写在这里
