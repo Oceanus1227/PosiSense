@@ -14,12 +14,16 @@ def _safe_sector_chg(ticker: str) -> float | None:
     if df.empty or len(df) < 2:
         return None
 
-    close = df["Close"]
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
+    # 兼容 MultiIndex
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.droplevel(1)
 
+    if "Close" not in df.columns:
+        return None
+
+    close = df["Close"].dropna()
     close.index = pd.to_datetime(close.index)
-    close = close.dropna().sort_index()
+    close = close.sort_index()
 
     if len(close) < 2:
         return None
