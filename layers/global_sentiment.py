@@ -27,7 +27,7 @@ def _vix_score(vix_val: float) -> float:
     # 异常值检测：VIX正常范围 5-100
     if vix_val > 100 or vix_val < 5:
         print(f"  ⚠️  VIX异常值检测: {vix_val}，使用历史均值20")
-        vix_val = 20  # 使用历史均值作为备用
+        vix_val = 20
     
     return float(np.interp(
         vix_val,
@@ -102,7 +102,7 @@ def get_global_sentiment() -> dict:
             detail[name] = f"{chg * 100:.2f}%"
             us_changes.append(chg)
             if name == "S&P500":
-                sp500_chg = chg * 100  # 记录用于一致性检查
+                sp500_chg = chg * 100
         else:
             detail[name] = "获取失败"
 
@@ -113,7 +113,24 @@ def get_global_sentiment() -> dict:
         detail["美股均涨跌得分"] = round(us_s, 3)
 
     # ── 数据一致性校验 ─────────────────────────────
-    # VIX与标普500方向一致性检查
     if vix_value and sp500_chg:
         # VIX极高(>40)但股市上涨(>1%)，可能是数据异常
         if vix_value > 40 and sp500_chg > 1.0:
+            print(f"  ⚠️  数据不一致警告: VIX极高({vix_value})但标普500上涨({sp500_chg:.2f}%)")
+            print("       可能原因：周日/节假日数据源异常，建议交易时段重试")
+            detail["数据警告"] = "VIX与股指方向矛盾，请检查数据源"
+        # VIX极低(<15)但股市大跌(<-1%)，也可能是异常
+        elif vix_value < 15 and sp500_chg < -1.0:
+            print(f"  ⚠️  数据不一致警告: VIX极低({vix_value})但标普500下跌({sp500_chg:.2f}%)")
+            detail["数据警告"] = "VIX与股指方向矛盾，请检查数据源"
+
+    # ── 美元指数 DXY（反向指标）────────────────────
+    dxy_chg = _get_latest_chg("DX-Y.NYB")
+    if dxy_chg is not None:
+        detail["美元指数"] = f"{dxy_chg * 100:.2f}%"
+        dxy_s = _index_score(-dxy_chg) * 0.5
+        score += dxy_s
+        detail["美元得分"] = round(dxy_s, 3)
+
+    score = max(-1.0, min(1.0, round(score, 3)))
+    return {"score": score, "detail": detail}
