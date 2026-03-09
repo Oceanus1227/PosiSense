@@ -1,12 +1,14 @@
 """
 全球宏观情绪层
 数据源：yfinance（VIX + 美股三大指数 + 美元指数）
+修复：周末自动获取周五数据
 """
 
 import numpy as np
 import yfinance as yf
 import yaml
 import os
+from datetime import datetime, timedelta
 
 _cfg_path = os.path.join(os.path.dirname(__file__), "..", "config.yaml")
 with open(_cfg_path) as f:
@@ -35,23 +37,43 @@ def _vix_score(vix_val: float) -> float:
     ))
 
 
+def _is_weekend(dt: datetime) -> bool:
+    """检查是否为周末（周六=5, 周日=6）"""
+    return dt.weekday() >= 5
+
+
+def _get_last_trading_date() -> datetime:
+    """获取最近一个交易日"""
+    today = datetime.now()
+    # 如果是周六，回退到周五
+    if today.weekday() == 5:
+        return today - timedelta(days=1)
+    # 如果是周日，回退到周五
+    elif today.weekday() == 6:
+        return today - timedelta(days=2)
+    return today
+
+
 def _get_latest_chg(ticker: str) -> float | None:
-    """获取某 ticker 最近一日涨跌幅"""
+    """获取某 ticker 最近一日涨跌幅（自动处理周末/节假日）"""
     try:
-        df = yf.download(ticker, period="5d", interval="1d",
+        # 拉取 10 天数据确保覆盖周末/节假日
+        df = yf.download(ticker, period="10d", interval="1d",
                          progress=False, auto_adjust=True)
         close = df["Close"].dropna()
         if len(close) < 2:
             return None
+        # 返回最后一个有效交易日的涨跌幅
         return float((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2])
     except Exception:
         return None
 
 
 def _get_vix() -> float | None:
-    """获取最新 VIX 收盘值"""
+    """获取最新 VIX 收盘值（自动处理周末/节假日）"""
     try:
-        df = yf.download("^VIX", period="5d", interval="1d",
+        # 拉取 10 天数据确保覆盖周末/节假日
+        df = yf.download("^VIX", period="10d", interval="1d",
                          progress=False, auto_adjust=True)
         close = df["Close"].dropna()
         return float(close.iloc[-1]) if len(close) >= 1 else None
@@ -66,6 +88,12 @@ def get_global_sentiment() -> dict:
     """
     score = 0.0
     detail = {}
+    
+    # 标记是否为周末数据
+    last_trading = _get_last_trading_date()
+    if _is_weekend(datetime.now()):
+        detail["数据日期"] = f"{last_trading.strftime('%Y-%m-%d')} (周五)"
+        detail["周末提示"] = "美股休市，使用最近交易日数据"
     
     vix_value = None
     sp500_chg = None
@@ -122,3 +150,33 @@ def get_global_sentiment() -> dict:
         dxy_s = _index_score(-dxy_chg) * 0.5
         score += dxy_s
         detail["美元得分"] = round(dxy_s, 3)
+    else:
+        detail["美元指数"] = "获取失败"
+
+    # 最终得分
+    score = round(score, 3)
+    
+    # 等级判断
+    if score >= 0.3:
+        level = "📈 积极"
+    elif score <= -0.3:
+        level = "📉 消极"
+    else:
+        level = "➖ 中性"
+    
+    detail["综合得分"] = score
+    detail["情绪等级"] = level
+    
+    return {
+        "score": score,
+        "level": level,
+        "detail": detail
+    }
+
+
+if __name__ == "__main__":
+    result = get_global_sentiment()
+    print(f"\n全球宏观情绪评分: {result['score']} ({result['level']})")
+    print("\n详情:")
+    for k, v in result['detail'].items():
+        print(f"  {k}: {v}")
